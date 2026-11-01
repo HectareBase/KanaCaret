@@ -100,10 +100,11 @@ void IndicatorWindow::SetTheme(const Theme& theme) {
     if (mapped_) Redraw();
 }
 
-void IndicatorWindow::SetStyle(int sizeDip, bool accentKana) {
-    if (sizeDip == sizeDip_ && accentKana == accentKana_) return;
+void IndicatorWindow::SetStyle(int sizeDip, const FillChoice& kanaFill, const FillChoice& latinFill) {
+    if (sizeDip == sizeDip_ && kanaFill == kanaFill_ && latinFill == latinFill_) return;
     sizeDip_ = sizeDip;
-    accentKana_ = accentKana;
+    kanaFill_ = kanaFill;
+    latinFill_ = latinFill;
     dirty_ = true;
     // 大きさが変わると位置も変わるので、次の表示で置き直す
     if (mapped_) {
@@ -149,7 +150,8 @@ void IndicatorWindow::Redraw() {
         oldBitmap_ = SelectObject(memDC_, dib_);
         bitmapSize_ = size;
     }
-    BadgeColors colors = ColorsFor(theme_, theme_.dark, accentKana_ && state_ == ImeState::Native);
+    bool native = state_ == ImeState::Native;
+    BadgeColors colors = ColorsFor(theme_, theme_.dark, native, native ? kanaFill_ : latinFill_);
     if (!renderer_->DrawBadge(memDC_, size, size, margin_, box_, dpi_, state_, colors)) return;
     dirty_ = false;
 

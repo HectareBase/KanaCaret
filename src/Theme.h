@@ -14,10 +14,18 @@ struct Theme {
 
 Theme LoadTheme();
 
+// バッジの塗りの指定。Auto はテーマに合わせた既定の配色(「あ」はアクセントカラー、「a」は無彩色)、
+// Neutral は「a」と同じ無彩色、Custom は利用者が選んだ色
+struct FillChoice {
+    enum Kind { Auto, Neutral, Custom } kind = Auto;
+    COLORREF color = 0;
+    bool operator==(const FillChoice&) const = default;
+};
+
 struct BadgeColors {
     D2D1_COLOR_F fill, border, text;
     float shadowAlpha;  // 0 なら影を描かない
 };
 
-// dark: 描く場所のテーマ、native: 「あ」を描くか
-BadgeColors ColorsFor(const Theme& theme, bool dark, bool native);
+// dark: 描く場所のテーマ、native: 「あ」を描くか、fill: 塗りの指定(ハイコントラストでは無視する)
+BadgeColors ColorsFor(const Theme& theme, bool dark, bool native, const FillChoice& fill = {});

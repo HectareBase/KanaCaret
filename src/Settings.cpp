@@ -3,6 +3,7 @@
 #include <shlobj.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <cwctype>
 
 namespace {
@@ -40,6 +41,28 @@ E ReadEnum(const std::wstring& path, const wchar_t* key, E def, E max) {
     return (v >= 0 && v <= (int)max) ? (E)v : def;
 }
 
+// 塗りの指定は auto / neutral / #RRGGBB の文字列で持つ
+FillChoice ReadFill(const std::wstring& path, const wchar_t* key, FillChoice def) {
+    wchar_t buf[16] = L"";
+    GetPrivateProfileStringW(kSection, key, L"", buf, _countof(buf), path.c_str());
+    std::wstring v = Lower(buf);
+    if (v == L"auto") return {FillChoice::Auto};
+    if (v == L"neutral") return {FillChoice::Neutral};
+    if (v.size() == 7 && v[0] == L'#' && v.find_first_not_of(L"0123456789abcdef", 1) == std::wstring::npos) {
+        unsigned long rgb = wcstoul(v.c_str() + 1, nullptr, 16);
+        return {FillChoice::Custom, RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)};
+    }
+    return def;
+}
+
+void WriteFill(const std::wstring& path, const wchar_t* key, const FillChoice& fill) {
+    wchar_t buf[16] = L"auto";
+    if (fill.kind == FillChoice::Neutral) wcscpy_s(buf, L"neutral");
+    else if (fill.kind == FillChoice::Custom)
+        swprintf_s(buf, L"#%02X%02X%02X", GetRValue(fill.color), GetGValue(fill.color), GetBValue(fill.color));
+    WritePrivateProfileStringW(kSection, key, buf, path.c_str());
+}
+
 }  // namespace
 
 void Settings::Load() {
@@ -47,8 +70,14 @@ void Settings::Load() {
     if (path.empty()) return;
     mode = ReadEnum(path, L"Mode", mode, DisplayMode::NativeOnly);
     placement = ReadEnum(path, L"Placement", placement, Placement::Below);
-    size = ReadEnum(path, L"Size", size, SizeOption::Large);
-    accentKana = ReadInt(path, L"AccentKana", accentKana) != 0;
+    // SizeDip が無ければ、以前の 3 段階の Size(0 = 小、1 = 中、2 = 大)から読み替える
+    constexpr int kOldSizes[] = {18, 22, 28};
+    int oldSize = ReadInt(path, L"Size", 1);
+    sizeDip = std::clamp(ReadInt(path, L"SizeDip", kOldSizes[std::clamp(oldSize, 0, 2)]), kMinSizeDip, kMaxSizeDip);
+    // KanaColor が無ければ、以前の AccentKana(0 なら「a」と同じ配色)から読み替える
+    kanaFill = ReadFill(path, L"KanaColor", {ReadInt(path, L"AccentKana", 1) ? FillChoice::Auto : FillChoice::Neutral});
+    latinFill = ReadFill(path, L"LatinColor", {});
+    if (latinFill.kind == FillChoice::Neutral) latinFill = {};
     mouseFallback = ReadInt(path, L"MouseFallback", mouseFallback) != 0;
 
     wchar_t buf[4096] = L"";
@@ -78,8 +107,12 @@ void Settings::Save() const {
     }
     WriteInt(path, L"Mode", (int)mode);
     WriteInt(path, L"Placement", (int)placement);
-    WriteInt(path, L"Size", (int)size);
-    WriteInt(path, L"AccentKana", accentKana);
+    WriteInt(path, L"SizeDip", sizeDip);
+    WriteFill(path, L"KanaColor", kanaFill);
+    WriteFill(path, L"LatinColor", latinFill);
+    // 以前のキーは、新しいキーと食い違わないよう消す
+    WritePrivateProfileStringW(kSection, L"Size", nullptr, path.c_str());
+    WritePrivateProfileStringW(kSection, L"AccentKana", nullptr, path.c_str());
     WriteInt(path, L"MouseFallback", mouseFallback);
     std::wstring list;
     for (const std::wstring& e : exclude) list += (list.empty() ? L"" : L",") + e;
@@ -96,14 +129,6 @@ void Settings::ToggleExclude(const std::wstring& exe) {
     auto it = std::find(exclude.begin(), exclude.end(), key);
     if (it != exclude.end()) exclude.erase(it);
     else if (!key.empty()) exclude.push_back(key);
-}
-
-int SizeDip(SizeOption size) {
-    switch (size) {
-    case SizeOption::Small: return 18;
-    case SizeOption::Large: return 28;
-    default: return 22;
-    }
 }
 
 bool IsAutostartEnabled() {

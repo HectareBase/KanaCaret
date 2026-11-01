@@ -19,7 +19,7 @@ public:
     void Hide();
     void BringToTop();
     void SetTheme(const Theme& theme);
-    void SetStyle(int sizeDip, bool accentKana);
+    void SetStyle(int sizeDip, const FillChoice& kanaFill, const FillChoice& latinFill);
 
 private:
     void Show(int boxX, int boxY, UINT dpi, ImeState state);
@@ -33,7 +33,7 @@ private:
     Renderer* renderer_ = nullptr;
     Theme theme_;
     int sizeDip_ = 22;
-    bool accentKana_ = true;
+    FillChoice kanaFill_, latinFill_;
 
     // 描画済みの画像
     HDC memDC_ = nullptr;

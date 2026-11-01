@@ -1,5 +1,7 @@
 #include "Theme.h"
 
+#include <cmath>
+
 namespace {
 
 constexpr wchar_t kPersonalize[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
@@ -13,6 +15,16 @@ bool ReadDword(const wchar_t* key, const wchar_t* name, DWORD& value) {
 D2D1_COLOR_F Rgb(BYTE r, BYTE g, BYTE b, float a = 1.0f) { return {r / 255.0f, g / 255.0f, b / 255.0f, a}; }
 
 D2D1_COLOR_F FromColorRef(COLORREF c) { return Rgb(GetRValue(c), GetGValue(c), GetBValue(c)); }
+
+// WCAG の相対輝度
+float RelativeLuminance(const D2D1_COLOR_F& c) {
+    auto linear = [](float v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+    return 0.2126f * linear(c.r) + 0.7152f * linear(c.g) + 0.0722f * linear(c.b);
+}
+
+D2D1_COLOR_F Mix(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t) {
+    return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.0f};
+}
 
 }  // namespace
 
@@ -42,18 +54,26 @@ Theme LoadTheme() {
     return t;
 }
 
-BadgeColors ColorsFor(const Theme& theme, bool dark, bool native) {
+BadgeColors ColorsFor(const Theme& theme, bool dark, bool native, const FillChoice& fill) {
     if (theme.highContrast) {
         D2D1_COLOR_F text = FromColorRef(GetSysColor(COLOR_WINDOWTEXT));
         if (native) return {FromColorRef(GetSysColor(COLOR_HIGHLIGHT)), text, FromColorRef(GetSysColor(COLOR_HIGHLIGHTTEXT)), 0};
         return {FromColorRef(GetSysColor(COLOR_WINDOW)), text, text, 0};
     }
-    if (native) {
+    const float shadow = dark ? 0.30f : 0.16f;
+    if (fill.kind == FillChoice::Custom) {
+        // 文字は背景との差が大きいほう(白か黒)にし、枠は背景を文字色へ少し寄せて輪郭を出す
+        D2D1_COLOR_F f = FromColorRef(fill.color);
+        bool light = RelativeLuminance(f) > 0.18f;  // 白・黒とのコントラスト比が等しくなる明るさ
+        D2D1_COLOR_F text = light ? Rgb(0, 0, 0) : Rgb(255, 255, 255);
+        return {f, Mix(f, text, 0.25f), text, shadow};
+    }
+    if (native && fill.kind == FillChoice::Auto) {
         // Fluent の AccentFillColorDefault / TextOnAccentFillColorPrimary に合わせる
-        D2D1_COLOR_F fill = dark ? theme.accentLight2 : theme.accentDark1;
-        return {fill, fill, dark ? Rgb(0, 0, 0) : Rgb(255, 255, 255), dark ? 0.30f : 0.16f};
+        D2D1_COLOR_F f = dark ? theme.accentLight2 : theme.accentDark1;
+        return {f, f, dark ? Rgb(0, 0, 0) : Rgb(255, 255, 255), shadow};
     }
     // 「a」は同系色の背景に埋もれないよう、ControlStrongStroke 相当の濃い枠を付ける
-    if (dark) return {Rgb(58, 58, 58), Rgb(154, 154, 154), Rgb(255, 255, 255), 0.30f};
-    return {Rgb(249, 249, 249), Rgb(138, 138, 138), Rgb(27, 27, 27), 0.16f};
+    if (dark) return {Rgb(58, 58, 58), Rgb(154, 154, 154), Rgb(255, 255, 255), shadow};
+    return {Rgb(249, 249, 249), Rgb(138, 138, 138), Rgb(27, 27, 27), shadow};
 }

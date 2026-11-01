@@ -9,7 +9,9 @@ public:
     // アイコンを差し替える。icon の所有権を受け取り、不要になったら破棄する
     void SetIcon(HICON icon);
 
-    // 通知領域からのメッセージが、メニューを開く操作(右クリック・クリック・キーボード)か
+    // 通知領域からのメッセージが、設定を開く操作(クリック・Enter キー)か
+    static bool IsOpenRequest(LPARAM lp);
+    // 通知領域からのメッセージが、メニューを開く操作(右クリック・アプリケーションキー)か
     static bool IsMenuRequest(LPARAM lp);
     // メニューを表示し、選ばれたコマンドを返す(なければ 0)。menu は呼び出し側が破棄する
     UINT TrackMenu(HMENU menu);

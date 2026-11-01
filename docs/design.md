@@ -9,7 +9,7 @@ KanaCaret は、テキストキャレット(文字入力位置)の少し上に�
 | 何もしていないときの CPU | 1 コアあたり 0.1% 前後 | 0.10% |
 | 入力中の CPU | 小さく抑える | メモ帳で毎秒 8 文字入力して 0.6〜1.1% |
 | メモリ | 小さく抑える | プライベート 5.7〜6.5MB(Direct2D/DirectWrite で約 3〜4MB) |
-| 実行ファイル | 単一 exe、ランタイム不要 | 約 225KB(アイコン込み、CRT 静的リンク) |
+| 実行ファイル | 単一 exe、ランタイム不要 | 約 273KB(アイコン・設定画面込み、CRT 静的リンク) |
 | IME 切り替えの反映 | 150ms 以内 | 入力直後は 100ms ごとに確認 |
 | 対応 OS | Windows 11 | Windows 10 は未確認 |
 
@@ -28,6 +28,7 @@ src/
   Renderer.*          Direct2D/DirectWrite でバッジを描く(インジケーター、通知領域のアイコン、exe のアイコン)
   Theme.*             Windows の配色設定の読み取りと、バッジの配色
   Settings.*          settings.ini と自動起動(Run キー)
+  SettingsWindow.*    設定画面(開いている間だけ作る)
   TrayIcon.*          通知領域のアイコンとメニューの表示
 resources/
   app.manifest        PerMonitorV2 DPI 対応、Common Controls v6
@@ -116,7 +117,7 @@ IME をオフにしても変換モードの NATIVE ビットは立ったまま�
 
 - ウィンドウ: `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`。クリックを透過し、フォーカスを奪わず、タスクバーや Alt+Tab に出ない。フォーカスが変わるたびに最前面を付け直す。
 - 描画: `UpdateLayeredWindow` に 32bpp のプリマルチプライド DIB を渡す。フェードは全体の不透明度だけを変える(フェードイン 83ms、フェードアウト 167ms、ease-out。「アニメーション効果」がオフなら即時)。
-- 大きさ: 小 18 / 中 22 / 大 28 DIP の正方形。影のために周囲に 6 DIP の余白を持つ。
+- 大きさ: 14〜40 DIP の正方形(既定 22)。影のために周囲に 6 DIP の余白を持つ。
 - 配置(キャレットとの間は 4 DIP):
   - 上: 左端をキャレットにそろえ、キャレットの上
   - 右上: キャレットの右で、下端をキャレットの上端にそろえる
@@ -135,7 +136,8 @@ IME をオフにしても変換モードの NATIVE ビットは立ったまま�
 | ハイコントラスト | `COLOR_WINDOW` / 「あ」は `COLOR_HIGHLIGHT` | `COLOR_WINDOWTEXT` | `COLOR_WINDOWTEXT` / `COLOR_HIGHLIGHTTEXT` |
 
 - 「a」の濃い枠は、暗いアプリの上でも輪郭が見えるようにするため(Fluent の ControlStrongStroke 相当)。
-- 「あ」の塗りは Fluent の AccentFillColorDefault に合わせる。アクセントは `HKCU\...\Explorer\Accent\AccentPalette` から読む。「アクセントカラーにする」をオフにすると「a」と同じ配色になる。
+- 「あ」の塗りは Fluent の AccentFillColorDefault に合わせる。アクセントは `HKCU\...\Explorer\Accent\AccentPalette` から読む。設定で「グレー」を選ぶと「a」と同じ配色になる。
+- 設定画面で色を選んだとき(`FillChoice::Custom`)は、選んだ色をライトでもダークでもそのまま塗る。文字は背景との差が大きいほう(相対輝度 0.18 を境に白か黒)、枠は背景を文字色へ 25% 寄せた色にする。読めない組み合わせを作れないよう、背景色だけを選んでもらう。ハイコントラストのときは選んだ色を使わない。
 - 角の丸みは箱の 5/22、文字は箱の 13/22。「あ」は Yu Gothic UI、「a」は Segoe UI Variable Text(無ければ Segoe UI)、どちらも Semibold。背景が透明なので文字はグレースケールのアンチエイリアス。
 - 影: 角丸を少しずつ大きくして薄く重ねる(6 層、広がり 4 DIP、下へ 1 DIP。不透明度はライト 16%、ダーク 30%)。
 - テーマの変更は `WM_SETTINGCHANGE` / `WM_SYSCOLORCHANGE` / `WM_DWMCOLORIZATIONCOLORCHANGED` で読み直す。インジケーターはアプリのテーマ(`AppsUseLightTheme`)、通知領域のアイコンは Windows のテーマ(`SystemUsesLightTheme`)に合わせる。
@@ -143,21 +145,33 @@ IME をオフにしても変換モードの NATIVE ビットは立ったまま�
 
 ## 設定と常駐
 
-設定は `%APPDATA%\KanaCaret\settings.ini`(UTF-16、セクション `[Indicator]`)。通知領域のメニューで変えるとすぐ保存する。
+設定は `%APPDATA%\KanaCaret\settings.ini`(UTF-16、セクション `[Indicator]`)。設定画面や通知領域のメニューで変えるとすぐ保存する。
 
 | キー | 値 | 既定 |
 |---|---|---|
 | `Mode` | 0 = 入力欄にいる間は常に表示、1 = 切り替えたときだけ(1.5 秒)、2 = 日本語入力のときだけ | 0 |
 | `Placement` | 0 = 上、1 = 右上、2 = 下 | 0 |
-| `Size` | 0 = 小、1 = 中、2 = 大 | 1 |
-| `AccentKana` | 1 = 「あ」をアクセントカラーにする | 1 |
+| `SizeDip` | バッジの大きさ(14〜40 DIP) | 22 |
+| `KanaColor` | 「あ」の塗り: `auto` = アクセントカラー、`neutral` = 「a」と同じ、`#RRGGBB` | `auto` |
+| `LatinColor` | 「a」の塗り: `auto` = テーマに合わせる、`#RRGGBB` | `auto` |
 | `MouseFallback` | 1 = 入力位置が分からないときはマウスの位置に表示 | 1 |
 | `Exclude` | 表示しない exe 名(小文字、カンマ区切り) | 空 |
 
+- 以前の `Size`(0/1/2 → 18/22/28)と `AccentKana`(1 → `auto`、0 → `neutral`)は、新しいキーが無いときだけ読み替える。保存するときに以前のキーは消す。
 - 自動起動は `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` の値 `KanaCaret`(exe のパス)。ini には持たない。
 - 二重起動は名前付き Mutex `Local\HectareBase.KanaCaret.SingleInstance` で防ぐ。
 - 他のアプリと重ならないよう、PC 内で共有される名前には持ち主名を含める: Mutex、ウィンドウクラス(`HectareBase.KanaCaret.Main` / `.Indicator`)。設定フォルダーと Run の値は読みやすさを優先して `KanaCaret`。
-- Explorer が再起動したら(`TaskbarCreated`)通知領域のアイコンを登録し直す。- メニューの「○○.exe では表示しない」には、最後にフォーカスがあった他アプリの名前が出る。
+- Explorer が再起動したら(`TaskbarCreated`)通知領域のアイコンを登録し直す。
+
+## 設定画面と通知領域のメニュー
+
+- 通知領域のアイコンをクリック(または Enter キー)すると設定画面を開き、右クリックでメニューを開く。`KanaCaret.exe --settings` でも開ける(起動中なら、そのプロセスに `WM_APP + 4` を送って開かせる)。
+- メニューは、その場で切り替えたいものだけにする: 「設定...」(既定の項目)、「○○.exe では表示しない」(最後にフォーカスがあった他アプリ)、「一時停止」、「終了」。
+- 設定画面(`SettingsWindow`)は、開いている間だけウィンドウを作り、閉じたら破棄する。常駐中の負荷とメモリは変わらない。
+- 左にカテゴリ(表示 / 見た目 / アプリ / 全般)、右にそのページを出す。部品は標準のコントロール(コンボボックス、スライダー、チェックボックス、リストボックス)で、コードで作って DIP で配置する。`WM_DPICHANGED` で配置とフォントを作り直す。Tab キーでの移動はメッセージループで `IsDialogMessage` を呼んで行う。
+- 色の見本とプレビューは `Renderer::DrawBadge` で描き、実際のバッジと同じ絵にする。プレビューはライトとダークの背景に、キャレットとその上のバッジを並べる。
+- 変更はすぐ保存して反映する(OK / キャンセルは置かない)。設定画面にフォーカスがある間、インジケーターは隠れる(手順 1)。
+- 見た目はライトだけ。タイトルバーは Mica(`DWMSBT_MAINWINDOW`)にする。
 
 ## 表示しない条件
 

@@ -15,6 +15,7 @@
 #include "IndicatorWindow.h"
 #include "Renderer.h"
 #include "Settings.h"
+#include "SettingsWindow.h"
 #include "Theme.h"
 #include "TrayIcon.h"
 #include "UiaWorker.h"
@@ -40,6 +41,7 @@ constexpr ULONGLONG kUiaIdlePollMs = 2000; // それ以外の間隔(ターミナ
 constexpr ULONGLONG kIdleRelocateMs = 5000;  // 入力が無い間の、取りこぼし対策の問い合わせ間隔
 constexpr ULONGLONG kFullscreenCheckMs = 1000;
 constexpr UINT kRehookMsg = WM_APP + 3;
+constexpr UINT kOpenSettingsMsg = WM_APP + 4;  // --settings で起動した 2 つ目のプロセスから届く
 constexpr UINT_PTR kCaretTimerId = 2;
 constexpr UINT kCaretCoalesceMs = 33;      // キャレットの通知はこの間隔(約 30 回/秒)にまとめる
 
@@ -79,17 +81,16 @@ void FlushStats(ULONGLONG now) {
     st.cpuSince = cpu;
 }
 
-// 通知領域のメニューのコマンド
+// 通知領域のメニューのコマンド(その他の設定は設定画面で変える)
 enum Command : UINT {
-    kCmdModeAlways = 100, kCmdModeOnChange, kCmdModeNativeOnly,
-    kCmdPlaceAbove = 110, kCmdPlaceAboveRight, kCmdPlaceBelow,
-    kCmdSizeSmall = 120, kCmdSizeMedium, kCmdSizeLarge,
-    kCmdAccent = 130, kCmdMouseFallback, kCmdExclude, kCmdAutostart, kCmdPause, kCmdExit,
+    kCmdSettings = 100, kCmdExclude, kCmdPause, kCmdExit,
 };
 
 struct App {
+    HINSTANCE instance = nullptr;
     HWND main = nullptr;
     Settings settings;
+    SettingsWindow settingsWindow;
     Renderer renderer;
     Theme theme;
     IndicatorWindow indicator;
@@ -168,18 +169,20 @@ bool IsFullscreenBusy(ULONGLONG now) {
 void UpdateTrayIcon(ImeState state) {
     g.trayState = state;
     int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(g.main));
-    bool accent = g.settings.accentKana && state == ImeState::Native;
-    g.tray.SetIcon(g.renderer.CreateIcon(size, state, ColorsFor(g.theme, g.theme.systemDark, accent)));
+    bool native = state == ImeState::Native;
+    const FillChoice& fill = native ? g.settings.kanaFill : g.settings.latinFill;
+    g.tray.SetIcon(g.renderer.CreateIcon(size, state, ColorsFor(g.theme, g.theme.systemDark, native, fill)));
 }
 
 void ApplyTheme() {
     g.theme = LoadTheme();
     g.indicator.SetTheme(g.theme);
+    g.settingsWindow.SetTheme(g.theme);
     UpdateTrayIcon(g.trayState);
 }
 
 void ApplySettings() {
-    g.indicator.SetStyle(SizeDip(g.settings.size), g.settings.accentKana);
+    g.indicator.SetStyle(g.settings.sizeDip, g.settings.kanaFill, g.settings.latinFill);
     UpdateTrayIcon(g.trayState);
 }
 
@@ -355,64 +358,53 @@ void Update(Reason reason) {
     else g.indicator.Hide();
 }
 
+// 設定画面で変えた設定は、すぐ保存して反映する(設定画面にフォーカスがある間、インジケーターは隠れている)
+void OnSettingsChanged() {
+    g.settings.Save();
+    ApplySettings();
+}
+
+void OpenSettings() {
+    g.settingsWindow.SetTheme(g.theme);
+    g.settingsWindow.SetRecentApp(g.focusExe);
+    g.settingsWindow.Open(g.instance, &g.settings, &g.renderer, OnSettingsChanged);
+}
+
 HMENU BuildMenu() {
     const Settings& s = g.settings;
     auto check = [](bool on) { return MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED); };
 
-    HMENU mode = CreatePopupMenu();
-    AppendMenuW(mode, MF_STRING, kCmdModeAlways, L"入力欄にいる間は常に表示");
-    AppendMenuW(mode, MF_STRING, kCmdModeOnChange, L"切り替えたときだけ表示");
-    AppendMenuW(mode, MF_STRING, kCmdModeNativeOnly, L"日本語入力のときだけ表示");
-    CheckMenuRadioItem(mode, kCmdModeAlways, kCmdModeNativeOnly, kCmdModeAlways + (UINT)s.mode, MF_BYCOMMAND);
-
-    HMENU place = CreatePopupMenu();
-    AppendMenuW(place, MF_STRING, kCmdPlaceAbove, L"キャレットの上");
-    AppendMenuW(place, MF_STRING, kCmdPlaceAboveRight, L"キャレットの右上");
-    AppendMenuW(place, MF_STRING, kCmdPlaceBelow, L"キャレットの下");
-    CheckMenuRadioItem(place, kCmdPlaceAbove, kCmdPlaceBelow, kCmdPlaceAbove + (UINT)s.placement, MF_BYCOMMAND);
-
-    HMENU size = CreatePopupMenu();
-    AppendMenuW(size, MF_STRING, kCmdSizeSmall, L"小");
-    AppendMenuW(size, MF_STRING, kCmdSizeMedium, L"中");
-    AppendMenuW(size, MF_STRING, kCmdSizeLarge, L"大");
-    CheckMenuRadioItem(size, kCmdSizeSmall, kCmdSizeLarge, kCmdSizeSmall + (UINT)s.size, MF_BYCOMMAND);
-
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)mode, L"表示するとき");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)place, L"位置");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)size, L"大きさ");
-    AppendMenuW(menu, check(s.accentKana), kCmdAccent, L"「あ」をアクセントカラーにする");
-    AppendMenuW(menu, check(s.mouseFallback), kCmdMouseFallback, L"入力位置が分からないときはマウスの位置に表示");
+    AppendMenuW(menu, MF_STRING, kCmdSettings, L"設定(&S)...");
+    SetMenuDefaultItem(menu, kCmdSettings, FALSE);  // アイコンのクリックで開くものを太字で示す
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     if (!g.focusExe.empty()) {
         std::wstring label = L"「" + g.focusExe + L"」では表示しない";
         AppendMenuW(menu, check(s.IsExcluded(g.focusExe)), kCmdExclude, label.c_str());
     }
-    AppendMenuW(menu, check(IsAutostartEnabled()), kCmdAutostart, L"Windows の起動時に実行");
-    AppendMenuW(menu, check(g.paused), kCmdPause, L"一時停止");
+    AppendMenuW(menu, check(g.paused), kCmdPause, L"一時停止(&P)");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kCmdExit, L"終了");
+    AppendMenuW(menu, MF_STRING, kCmdExit, L"終了(&X)");
     return menu;
 }
 
 void OnCommand(UINT cmd) {
     Settings& s = g.settings;
-    if (cmd >= kCmdModeAlways && cmd <= kCmdModeNativeOnly) s.mode = (DisplayMode)(cmd - kCmdModeAlways);
-    else if (cmd >= kCmdPlaceAbove && cmd <= kCmdPlaceBelow) s.placement = (Placement)(cmd - kCmdPlaceAbove);
-    else if (cmd >= kCmdSizeSmall && cmd <= kCmdSizeLarge) s.size = (SizeOption)(cmd - kCmdSizeSmall);
-    else if (cmd == kCmdAccent) s.accentKana = !s.accentKana;
-    else if (cmd == kCmdMouseFallback) s.mouseFallback = !s.mouseFallback;
-    else if (cmd == kCmdExclude) s.ToggleExclude(g.focusExe);
-    else if (cmd == kCmdAutostart) SetAutostart(!IsAutostartEnabled());
-    else if (cmd == kCmdPause) g.paused = !g.paused;
-    else if (cmd == kCmdExit) {
+    if (cmd == kCmdSettings) {
+        OpenSettings();
+        return;
+    } else if (cmd == kCmdExclude) {
+        s.ToggleExclude(g.focusExe);
+        s.Save();
+        g.settingsWindow.Refresh();
+    } else if (cmd == kCmdPause) {
+        g.paused = !g.paused;
+    } else if (cmd == kCmdExit) {
         DestroyWindow(g.main);
         return;
     } else {
         return;
     }
-    s.Save();
-    ApplySettings();
     g.showUntil = GetTickCount64() + kFlashMs;  // 変更がすぐ分かるよう、いったん表示する
     Update(Reason::Focus);
 }
@@ -495,7 +487,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case kTrayMsg:
-        if (TrayIcon::IsMenuRequest(lp)) {
+        if (TrayIcon::IsOpenRequest(lp)) {
+            OpenSettings();
+        } else if (TrayIcon::IsMenuRequest(lp)) {
             HMENU menu = BuildMenu();
             UINT cmd = g.tray.TrackMenu(menu);
             DestroyMenu(menu);
@@ -510,6 +504,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         OnUiaResult(reinterpret_cast<UiaWorker::Result*>(lp));
         Update(Reason::UiaResult);
         return 0;
+    case kOpenSettingsMsg:
+        OpenSettings();
+        return 0;
     case kRehookMsg:
         HookCaretEvents((DWORD)wp);
         return 0;
@@ -522,6 +519,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kTimerId);
         RemoveHooks();
         g.uia.Stop();
+        g.settingsWindow.Close();
         g.tray.Remove();
         g.indicator.Destroy();
         PostQuitMessage(0);
@@ -550,11 +548,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
             st.path = std::wstring(temp) + L"kanacaret-stats.log";
         }
     }
+    const bool openSettings = wcsstr(cmdLine, L"--settings") != nullptr;
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
-    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+        // すでに動いていれば、--settings のときはそちらの設定画面を開く
+        if (HWND running = openSettings ? FindWindowW(kMainClass, nullptr) : nullptr) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(running, &pid);
+            AllowSetForegroundWindow(pid);
+            PostMessageW(running, kOpenSettingsMsg, 0, 0);
+        }
+        return 0;
+    }
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+    g.instance = instance;
     WNDCLASSW wc{};
     wc.lpfnWndProc = MainProc;
     wc.hInstance = instance;
@@ -576,9 +585,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
     // 間引くと半角/全角キーの反映が遅れる(キー入力を受ける仕組みは、セキュリティソフトに警戒されるので使わない)
     SetCoalescableTimer(g.main, kTimerId, kTickMs, nullptr, 20);
     Update(Reason::Focus);
+    if (openSettings) OpenSettings();
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (g.settingsWindow.PreTranslate(&msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

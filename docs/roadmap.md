@@ -26,3 +26,4 @@
 5. **UIA のイベント**: 定期的な問い合わせの代わりに、`TextSelectionChanged` などの UIA イベントで追従する。UIA を使うアプリでの負荷と遅れが減る見込み。
 6. **アクリル背景**: DWM のアクリル(`DWMSBT_TRANSIENTWINDOW`)を使えるか。クリック透過との両立が課題。
 7. **Windows 10 での確認**
+8. **設定画面のダークテーマ**: いまはライトの見た目だけ。標準のコントロールをダークにするには公開されていない uxtheme の関数が必要([decisions.md](decisions.md))。

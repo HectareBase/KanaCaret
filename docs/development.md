@@ -112,6 +112,7 @@ build\badge-preview.exe --ico resources\app.ico
 | 負荷に関わる処理 | `measure-load.ps1 -Seconds 60` で、何もしていないときが 1 コアあたり 0.1% 前後のままか |
 | 見た目 | `badge-preview.exe` の画像と、`check-app.ps1` の実画面 |
 | 設定・メニュー | `settings.ini` を書き換えて起動し直し、`check-app.ps1` で表示が変わるか。確認後は ini を元に戻す |
+| 設定画面 | `KanaCaret.exe --settings` で開き、各ページの見た目と、変えた値が `settings.ini` とインジケーターに反映されるか。確認後は ini と Run キーを元に戻す |
 
 ## リリース手順
 

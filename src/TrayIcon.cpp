@@ -51,15 +51,13 @@ void TrayIcon::SetIcon(HICON icon) {
     icon_ = icon;
 }
 
+// NOTIFYICON_VERSION_4 では LOWORD(lParam) にイベントが入る
+bool TrayIcon::IsOpenRequest(LPARAM lp) {
+    return LOWORD(lp) == NIN_SELECT || LOWORD(lp) == NIN_KEYSELECT;
+}
+
 bool TrayIcon::IsMenuRequest(LPARAM lp) {
-    // NOTIFYICON_VERSION_4 では LOWORD(lParam) にイベントが入る
-    switch (LOWORD(lp)) {
-    case WM_CONTEXTMENU:
-    case NIN_SELECT:
-    case NIN_KEYSELECT:
-        return true;
-    }
-    return false;
+    return LOWORD(lp) == WM_CONTEXTMENU;
 }
 
 UINT TrayIcon::TrackMenu(HMENU menu) {
