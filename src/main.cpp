@@ -24,7 +24,6 @@ namespace {
 // 他のアプリと重ならないよう、持ち主名を含めた一意の名前にする
 constexpr wchar_t kMainClass[] = L"HectareBase.KanaCaret.Main";
 constexpr wchar_t kMutexName[] = L"Local\\HectareBase.KanaCaret.SingleInstance";
-constexpr wchar_t kLegacyMainClass[] = L"ImeIndicator.Main";  // 0.1.0(旧名)のメインウィンドウ
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kTickMs = 100;              // IME 状態の確認間隔
@@ -533,10 +532,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
     }
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
-
-    // 旧版(0.1.0)が動いていれば、インジケーターが 2 つ出ないよう終了させる
-    if (HWND legacy = FindWindowW(kLegacyMainClass, nullptr)) PostMessageW(legacy, WM_CLOSE, 0, 0);
-    MigrateLegacyAutostart();
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 

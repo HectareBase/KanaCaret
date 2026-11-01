@@ -11,29 +11,14 @@ constexpr wchar_t kSection[] = L"Indicator";
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"KanaCaret";
 constexpr wchar_t kAppFolder[] = L"KanaCaret";
-// 0.1.0(旧名「IME インジケーター」)の設定フォルダーと Run の値。初回起動時に引き継ぐ
-constexpr wchar_t kLegacyFolder[] = L"ImeIndicator";
-constexpr wchar_t kLegacyRunValue[] = L"ImeIndicator";
-
-std::wstring AppDataDir(const wchar_t* name) {
-    PWSTR appData = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appData))) return {};
-    std::wstring dir = std::wstring(appData) + L"\\" + name;
-    CoTaskMemFree(appData);
-    return dir;
-}
 
 std::wstring IniPath() {
-    std::wstring dir = AppDataDir(kAppFolder);
-    if (dir.empty()) return {};
+    PWSTR appData = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appData))) return {};
+    std::wstring dir = std::wstring(appData) + L"\\" + kAppFolder;
+    CoTaskMemFree(appData);
     CreateDirectoryW(dir.c_str(), nullptr);
-    std::wstring path = dir + L"\\settings.ini";
-    // 新しい設定が無く旧版の設定があれば写す(旧フォルダーは消さない)
-    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::wstring legacy = AppDataDir(kLegacyFolder) + L"\\settings.ini";
-        CopyFileW(legacy.c_str(), path.c_str(), TRUE);
-    }
-    return path;
+    return dir + L"\\settings.ini";
 }
 
 std::wstring Lower(std::wstring s) {
@@ -139,16 +124,4 @@ void SetAutostart(bool enable) {
         RegDeleteValueW(key, kRunValue);
     }
     RegCloseKey(key);
-}
-
-void MigrateLegacyAutostart() {
-    // 旧版の登録は旧 exe を指しているので、消してから、いま動いている exe で登録し直す
-    if (RegGetValueW(HKEY_CURRENT_USER, kRunKey, kLegacyRunValue, RRF_RT_REG_SZ, nullptr, nullptr, nullptr) !=
-        ERROR_SUCCESS)
-        return;
-    HKEY key = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) return;
-    RegDeleteValueW(key, kLegacyRunValue);
-    RegCloseKey(key);
-    SetAutostart(true);
 }
