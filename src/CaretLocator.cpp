@@ -11,6 +11,7 @@ bool ReadGuiThread(HWND hwnd, FocusInfo& info) {
     info.focus = gti.hwndFocus;
     info.caretWnd = gti.hwndCaret;
     info.caret = gti.rcCaret;
+    if (gti.flags & GUI_INMOVESIZE) info.moveSize = true;
     return true;
 }
 

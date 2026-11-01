@@ -97,11 +97,12 @@ struct App {
     ImeState trayState = ImeState::Direct;
     UiaWorker uia;
     UINT taskbarCreatedMsg = 0;
-    HWINEVENTHOOK hooks[4] = {};  // 0, 1: フォアグラウンドとフォーカス(全体)、2, 3: キャレット(フォーカス中のアプリ)
+    HWINEVENTHOOK hooks[5] = {};  // 0, 1, 4: フォアグラウンド、フォーカス、移動・サイズ変更(全体)、2, 3: キャレット(フォーカス中のアプリ)
     DWORD caretHookPid = 0;
     bool caretTimerPending = false;
     bool paused = false;
     bool updating = false;
+    bool moving = false;  // ウィンドウの移動・サイズ変更中で隠している
 
     HWND lastFocus = nullptr;
     DWORD lastFocusPid = 0;
@@ -243,6 +244,20 @@ void Update(Reason reason) {
         g.indicator.BringToTop();
         // フックの付け替えは、通知の処理中を避けてメッセージループに戻ってから行う
         if (fi.pid != g.caretHookPid) PostMessageW(g.main, kRehookMsg, fi.pid, 0);
+    }
+
+    // ウィンドウの移動・サイズ変更中は、位置の取得が追いつかず表示がかくつくので隠す。
+    // 覚えていた位置は古くなるので捨て、終わったらすぐ問い合わせ直す
+    if (fi.moveSize) {
+        g.moving = true;
+        g.lastLocateOk = false;
+        g.lastCaretOk = 0;
+        g.indicator.Hide();
+        return;
+    }
+    if (g.moving) {
+        g.moving = false;
+        reason = Reason::Caret;
     }
 
     if (g.settings.IsExcluded(g.focusExe) || IsFullscreenBusy(now)) {
@@ -410,6 +425,10 @@ void CALLBACK OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, L
         st.focusEvents++;
         Update(Reason::Focus);
         return;
+    case EVENT_SYSTEM_MOVESIZESTART:  // 開始ですぐ隠し、終了ですぐ出し直す(判定は Update() の GUI_INMOVESIZE)
+    case EVENT_SYSTEM_MOVESIZEEND:
+        Update(Reason::Caret);
+        return;
     case EVENT_OBJECT_SHOW:
     case EVENT_OBJECT_HIDE:
     case EVENT_OBJECT_LOCATIONCHANGE: {
@@ -439,6 +458,7 @@ HWINEVENTHOOK Hook(DWORD from, DWORD to, DWORD pid) {
 void InstallHooks() {
     g.hooks[0] = Hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0);
     g.hooks[1] = Hook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, 0);
+    g.hooks[4] = Hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, 0);
 }
 
 // キャレットの表示・移動の通知は、フォーカスのあるアプリからだけ受け取る。

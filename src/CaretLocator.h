@@ -7,6 +7,7 @@ struct FocusInfo {
     DWORD pid = 0;            // focus のプロセス
     HWND caretWnd = nullptr;  // Win32 のシステムキャレットを持つウィンドウ
     RECT caret{};             // caretWnd のクライアント座標
+    bool moveSize = false;    // ウィンドウの移動・サイズ変更中(GUI_INMOVESIZE)
 };
 
 // 手前のアプリでフォーカスのあるウィンドウを調べる。
