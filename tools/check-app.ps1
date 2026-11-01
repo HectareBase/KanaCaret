@@ -46,7 +46,7 @@ public static class W {
 [void][W]::SetThreadDpiAwarenessContext([IntPtr](-4))  # 座標を物理ピクセルで扱う
 
 function Get-Indicator {
-    $h = [W]::FindWindow("ImeIndicator.Indicator", $null)
+    $h = [W]::FindWindow("HectareBase.KanaCaret.Indicator", $null)
     if ($h -eq [IntPtr]::Zero) { return $null }
     $r = New-Object W+RECT
     [void][W]::GetWindowRect($h, [ref]$r)
@@ -74,7 +74,7 @@ function Press-Win {
     [W]::keybd_event(0x5B, 0, 0, [IntPtr]::Zero); [W]::keybd_event(0x5B, 0, 2, [IntPtr]::Zero)
 }
 
-if (-not (Get-Process ime-indicator -ErrorAction SilentlyContinue)) { throw "ime-indicator.exe が起動していません" }
+if (-not (Get-Process KanaCaret -ErrorAction SilentlyContinue)) { throw "KanaCaret.exe が起動していません" }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
 # 対象を開く(新しく開いたウィンドウだけを後で閉じる)
@@ -107,18 +107,35 @@ if ($cls) {
 }
 Start-Sleep -Milliseconds 500
 
+# キー入力の前に、対象が本当に前面にあるかを確かめる。利用者が他のアプリを操作していると、
+# Windows は前面の切り替えを許さないので、そのまま打つと利用者のアプリに入力してしまう
+function Test-TargetForeground {
+    $fg = [W]::GetForegroundWindow()
+    if ($win) { return $fg -eq $win }
+    $fpid = 0
+    [void][W]::GetWindowThreadProcessId($fg, [ref]$fpid)
+    return (Get-Process -Id $fpid -ErrorAction SilentlyContinue).ProcessName -in "SearchHost", "StartMenuExperienceHost"
+}
+function Assert-TargetForeground {
+    if (Test-TargetForeground) { return }
+    if ($win -and -not $keep) { [void][W]::PostMessage($win, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+    throw "$Target が前面にならなかったので中止しました(他のアプリへ入力しないため)。操作していない状態で実行し直してください"
+}
+
 # 入力欄にフォーカスを移して文字を打つ
+Assert-TargetForeground
 switch ($Target) {
     "explorer" { [System.Windows.Forms.SendKeys]::SendWait("^e"); Start-Sleep -Milliseconds 800 }
     "settings" { [System.Windows.Forms.SendKeys]::SendWait("^e"); Start-Sleep -Milliseconds 800 }
 }
+Assert-TargetForeground
 [System.Windows.Forms.SendKeys]::SendWait("abc")
 Start-Sleep -Milliseconds 1200
 $ind = Get-Indicator
 "[$Target] a: visible=$($ind.Visible) pos=($($ind.Left),$($ind.Top)) size=$($ind.Size)"
 Save-Shot "a" $ind
 
-if ($Ime) {
+if ($Ime -and (Test-TargetForeground)) {
     Set-ImeOpen $true
     Start-Sleep -Milliseconds 800
     $ind = Get-Indicator
@@ -128,13 +145,13 @@ if ($Ime) {
 }
 
 # 後片付け
-if ($Target -eq "start") { [System.Windows.Forms.SendKeys]::SendWait("{ESC}") }
+if ($Target -eq "start") { if (Test-TargetForeground) { [System.Windows.Forms.SendKeys]::SendWait("{ESC}") } }
 elseif ($win) {
     # 入力した文字を消してから閉じる(未保存の確認を出さないため。メモ帳は他のウィンドウと
-    # 同じプロセスのことがあるので、プロセスは終了しない)
+    # 同じプロセスのことがあるので、プロセスは終了しない)。前面でなければ打たない
     if ($Target -eq "notepad" -or $Target -eq "terminal" -or $keep) {
         [void][W]::SetForegroundWindow($win)
-        [System.Windows.Forms.SendKeys]::SendWait("{BS}{BS}{BS}")
+        if (Test-TargetForeground) { [System.Windows.Forms.SendKeys]::SendWait("{BS}{BS}{BS}") }
         Start-Sleep -Milliseconds 300
     }
     if (-not $keep) { [void][W]::PostMessage($win, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }

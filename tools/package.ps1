@@ -1,16 +1,16 @@
 ﻿# 配布用の zip を作る。
 #   powershell -ExecutionPolicy Bypass -File tools\package.ps1
-# dist\ime-indicator-<バージョン>.zip に、ime-indicator.exe、README.md、LICENSE を入れる。
+# dist\KanaCaret-<バージョン>.zip に、KanaCaret.exe、README.md、LICENSE を入れる。
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
 & cmd /c "`"$root\build.cmd`""
 if ($LASTEXITCODE -ne 0) { throw "ビルドに失敗しました" }
 
-$exe = Join-Path $root "build\ime-indicator.exe"
+$exe = Join-Path $root "build\KanaCaret.exe"
 $version = (Get-Item $exe).VersionInfo.ProductVersion
 $dist = Join-Path $root "dist"
-$stage = Join-Path $dist "ime-indicator-$version"
+$stage = Join-Path $dist "KanaCaret-$version"
 $zip = "$stage.zip"
 
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }

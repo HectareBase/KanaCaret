@@ -16,7 +16,7 @@ bool TrayIcon::Add(HWND owner, UINT callbackMsg) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     nid.uCallbackMessage = callbackMsg;
     nid.hIcon = icon_ ? icon_ : LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(nid.szTip, L"IME インジケーター");
+    wcscpy_s(nid.szTip, L"KanaCaret");
     added_ = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
     if (added_) {
         nid.uVersion = NOTIFYICON_VERSION_4;

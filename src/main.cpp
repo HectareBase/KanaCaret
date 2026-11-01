@@ -1,4 +1,4 @@
-// IME インジケーター
+// KanaCaret
 // テキストキャレットの上に、IME が日本語入力なら「あ」、直接入力なら「a」を表示する常駐アプリ。
 #include <windows.h>
 #include <objbase.h>
@@ -21,8 +21,10 @@
 
 namespace {
 
-constexpr wchar_t kMainClass[] = L"ImeIndicator.Main";
-constexpr wchar_t kMutexName[] = L"Local\\ImeIndicator.SingleInstance";
+// 他のアプリと重ならないよう、持ち主名を含めた一意の名前にする
+constexpr wchar_t kMainClass[] = L"HectareBase.KanaCaret.Main";
+constexpr wchar_t kMutexName[] = L"Local\\HectareBase.KanaCaret.SingleInstance";
+constexpr wchar_t kLegacyMainClass[] = L"ImeIndicator.Main";  // 0.1.0(旧名)のメインウィンドウ
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kTickMs = 100;              // IME 状態の確認間隔
@@ -44,7 +46,7 @@ constexpr UINT kCaretCoalesceMs = 33;      // キャレットの通知はこの�
 
 enum class Reason { Tick, Focus, Caret, UiaResult };
 
-// --stats で起動すると、負荷の内訳を 10 秒ごとに %TEMP%\ime-indicator-stats.log へ書く(調査用)。
+// --stats で起動すると、負荷の内訳を 10 秒ごとに %TEMP%\kanacaret-stats.log へ書く(調査用)。
 // --stats=<パス> で書き出し先を変えられる(tools\measure-load.ps1 は local\logs\ を指定する)
 struct Stats {
     bool enabled = false;
@@ -526,11 +528,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
         } else {
             wchar_t temp[MAX_PATH];
             GetTempPathW(MAX_PATH, temp);
-            st.path = std::wstring(temp) + L"ime-indicator-stats.log";
+            st.path = std::wstring(temp) + L"kanacaret-stats.log";
         }
     }
     HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+
+    // 旧版(0.1.0)が動いていれば、インジケーターが 2 つ出ないよう終了させる
+    if (HWND legacy = FindWindowW(kLegacyMainClass, nullptr)) PostMessageW(legacy, WM_CLOSE, 0, 0);
+    MigrateLegacyAutostart();
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
@@ -540,7 +546,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
     wc.lpszClassName = kMainClass;
     RegisterClassW(&wc);
     // 通知領域とブロードキャスト(テーマ変更・TaskbarCreated)を受けるための非表示ウィンドウ
-    g.main = CreateWindowExW(WS_EX_TOOLWINDOW, kMainClass, L"IME インジケーター", WS_POPUP, 0, 0, 0, 0, nullptr,
+    g.main = CreateWindowExW(WS_EX_TOOLWINDOW, kMainClass, L"KanaCaret", WS_POPUP, 0, 0, 0, 0, nullptr,
                              nullptr, instance, nullptr);
     if (!g.main || !g.renderer.Init() || !g.indicator.Create(instance, &g.renderer)) return 1;
 

@@ -18,12 +18,12 @@ BEGIN
     BEGIN
         BLOCK "041104b0"
         BEGIN
-            VALUE "FileDescription", "IME インジケーター"
+            VALUE "FileDescription", "KanaCaret - IME の状態を入力位置に表示"
             VALUE "FileVersion", APP_VERSION_STR
-            VALUE "InternalName", "ime-indicator"
-            VALUE "LegalCopyright", "Copyright (c) IME Indicator contributors. MIT License."
-            VALUE "OriginalFilename", "ime-indicator.exe"
-            VALUE "ProductName", "IME インジケーター"
+            VALUE "InternalName", "KanaCaret"
+            VALUE "LegalCopyright", "Copyright (c) KanaCaret contributors. MIT License."
+            VALUE "OriginalFilename", "KanaCaret.exe"
+            VALUE "ProductName", "KanaCaret"
             VALUE "ProductVersion", APP_VERSION_STR
         END
     END

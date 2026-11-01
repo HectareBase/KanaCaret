@@ -1,6 +1,6 @@
 # 設計
 
-テキストキャレット(文字入力位置)の少し上に、IME が日本語入力なら「あ」、直接入力なら「a」を表示する常駐アプリ。
+KanaCaret は、テキストキャレット(文字入力位置)の少し上に、IME が日本語入力なら「あ」、直接入力なら「a」を表示する常駐アプリ。0.1.0 までは「IME インジケーター」という名前だった。
 
 ## 目標
 
@@ -141,7 +141,7 @@ IME をオフにしても変換モードの NATIVE ビットは立ったまま�
 
 ## 設定と常駐
 
-設定は `%APPDATA%\ImeIndicator\settings.ini`(UTF-16、セクション `[Indicator]`)。通知領域のメニューで変えるとすぐ保存する。
+設定は `%APPDATA%\KanaCaret\settings.ini`(UTF-16、セクション `[Indicator]`)。通知領域のメニューで変えるとすぐ保存する。
 
 | キー | 値 | 既定 |
 |---|---|---|
@@ -152,9 +152,22 @@ IME をオフにしても変換モードの NATIVE ビットは立ったまま�
 | `MouseFallback` | 1 = 入力位置が分からないときはマウスの位置に表示 | 1 |
 | `Exclude` | 表示しない exe 名(小文字、カンマ区切り) | 空 |
 
-- 自動起動は `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` の値 `ImeIndicator`(exe のパス)。ini には持たない。
-- 二重起動は名前付き Mutex `Local\ImeIndicator.SingleInstance` で防ぐ。
+- 自動起動は `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` の値 `KanaCaret`(exe のパス)。ini には持たない。
+- 二重起動は名前付き Mutex `Local\HectareBase.KanaCaret.SingleInstance` で防ぐ。
+- 他のアプリと重ならないよう、PC 内で共有される名前には持ち主名を含める: Mutex、ウィンドウクラス(`HectareBase.KanaCaret.Main` / `.Indicator`)。設定フォルダーと Run の値は読みやすさを優先して `KanaCaret`。
 - Explorer が再起動したら(`TaskbarCreated`)通知領域のアイコンを登録し直す。
+
+### 旧版(0.1.0「IME インジケーター」)からの引き継ぎ
+
+起動時に次を行う(`main.cpp` の `wWinMain`、`Settings.cpp`)。旧版の名前は `kLegacy...` の定数にまとめてある。
+
+| 旧版 | 引き継ぎ |
+|---|---|
+| ウィンドウクラス `ImeIndicator.Main` | 見つかれば `WM_CLOSE` を送って終了させる |
+| `%APPDATA%\ImeIndicator\settings.ini` | 新しい settings.ini が無ければ写す。旧フォルダーは消さない |
+| Run の値 `ImeIndicator` | あれば消し、いま動いている exe で `KanaCaret` として登録し直す |
+
+旧版の利用者がほぼいなくなったら、この引き継ぎは削除してよい。
 - メニューの「○○.exe では表示しない」には、最後にフォーカスがあった他アプリの名前が出る。
 
 ## 表示しない条件

@@ -1,6 +1,8 @@
-# IME インジケーター
+# KanaCaret
 
 文字を入力している位置(テキストキャレット)のすぐ上に、IME が日本語入力なら「あ」、直接入力なら「a」を表示する Windows 11 用の常駐アプリです。
+
+> 0.1.0 までは「IME インジケーター」(`ime-indicator.exe`)という名前でした。移行のしかたは「[旧版からの移行](#旧版ime-インジケーターからの移行)」を見てください。
 
 - 軽量: 何もしていないときの CPU 使用率は 1 コアあたり約 0.1%、メモリは約 6MB
 - Windows 11 の見た目に合わせた角丸・影・フェード。ライト/ダークテーマ、アクセントカラー、ハイコントラストに追従
@@ -13,8 +15,18 @@
 
 ## インストール
 
-1. [Releases](../../releases) から `ime-indicator-<バージョン>.zip` をダウンロードし、好きなフォルダーに展開します。
-2. `ime-indicator.exe` を起動します。通知領域(タスクバーの右端)にアイコンが出ます。
+1. [Releases](../../releases) から `KanaCaret-<バージョン>.zip` をダウンロードし、好きなフォルダーに展開します。
+2. `KanaCaret.exe` を起動します。通知領域(タスクバーの右端)にアイコンが出ます。
+
+### 旧版(IME インジケーター)からの移行
+
+`KanaCaret.exe` を起動すると、次のものを自動で引き継ぎます。
+
+- 旧版が起動していれば終了させます(インジケーターが 2 つ出ないように)。
+- 設定(`%APPDATA%\ImeIndicator\settings.ini`)を `%APPDATA%\KanaCaret\` に写します。
+- 「Windows の起動時に実行」をオンにしていた場合は、新しい exe で登録し直します。
+
+確認できたら、旧版の `ime-indicator.exe` と、フォルダー `%APPDATA%\ImeIndicator` は削除してかまいません。
 
 ### 「Windows によって PC が保護されました」と表示されたら
 
@@ -23,7 +35,7 @@
 心配な場合は、Releases に載せている SHA256 ハッシュと、ダウンロードした zip のハッシュが一致するかを確かめてください。
 
 ```powershell
-Get-FileHash .\ime-indicator-0.1.0.zip -Algorithm SHA256
+Get-FileHash .\KanaCaret-0.2.0.zip -Algorithm SHA256
 ```
 
 ## 使い方
@@ -53,13 +65,13 @@ Get-FileHash .\ime-indicator-0.1.0.zip -Algorithm SHA256
 
 - インターネットには一切接続しません。
 - 入力した文字は読み取りません。手前のアプリに対して、IME の状態(オン/オフ・入力モード)と入力位置の座標だけを問い合わせます。
-- 保存するのは設定ファイル `%APPDATA%\ImeIndicator\settings.ini` だけです。「Windows の起動時に実行」をオンにすると、レジストリ `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` に `ImeIndicator` を登録します。
+- 保存するのは設定ファイル `%APPDATA%\KanaCaret\settings.ini` だけです。「Windows の起動時に実行」をオンにすると、レジストリ `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` に `KanaCaret` を登録します。
 
 ## アンインストール
 
 1. 「Windows の起動時に実行」をオンにしていた場合は、メニューでオフにします。
 2. メニューの「終了」でアプリを終了します。
-3. 展開したフォルダーと、設定のフォルダー `%APPDATA%\ImeIndicator` を削除します。
+3. 展開したフォルダーと、設定のフォルダー `%APPDATA%\KanaCaret` を削除します。
 
 ---
 

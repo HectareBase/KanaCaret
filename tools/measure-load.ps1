@@ -6,15 +6,15 @@
 param([int]$Seconds = 60)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root "build\ime-indicator.exe"
+$exe = Join-Path $root "build\KanaCaret.exe"
 if (-not (Test-Path $exe)) { throw "先に build.cmd でビルドしてください" }
 
 $logDir = Join-Path $root "local\logs"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $log = Join-Path $logDir ("stats-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 
-$wasRunning = [bool](Get-Process ime-indicator -ErrorAction SilentlyContinue)
-Get-Process ime-indicator -ErrorAction SilentlyContinue | Stop-Process
+$wasRunning = [bool](Get-Process KanaCaret -ErrorAction SilentlyContinue)
+Get-Process KanaCaret -ErrorAction SilentlyContinue | Stop-Process
 Start-Sleep -Milliseconds 400
 
 $p = Start-Process $exe -ArgumentList "--stats=`"$log`"" -PassThru

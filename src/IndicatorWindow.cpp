@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr wchar_t kClassName[] = L"ImeIndicator.Indicator";
+constexpr wchar_t kClassName[] = L"HectareBase.KanaCaret.Indicator";
 constexpr int kMarginDip = 6;      // 影を描く余白(Renderer の影の広がり + 下へのずれ)
 constexpr int kGapDip = 4;         // キャレットとの間隔
 constexpr UINT kFadeInMs = 83;     // Fluent の Fast

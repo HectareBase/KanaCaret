@@ -13,9 +13,9 @@ build.cmd
 
 `build.cmd` が Visual Studio を探し、CMake(Ninja、Release)でビルドする。
 
-- **起動中の `ime-indicator.exe` があるとリンクに失敗する**(`LNK1104`)。先に終了させる。
+- **起動中の `KanaCaret.exe` があるとリンクに失敗する**(`LNK1104`)。先に終了させる。
   ```powershell
-  Get-Process ime-indicator -ErrorAction SilentlyContinue | Stop-Process
+  Get-Process KanaCaret -ErrorAction SilentlyContinue | Stop-Process
   ```
 - 警告は出ない状態を保つ(`/W4`)。
 
@@ -38,9 +38,9 @@ build.cmd
 | `tools/measure-load.ps1` | `local/logs/` | `stats-<yyyyMMdd-HHmmss>.log` |
 | `tools/check-app.ps1` | `local/checks/<yyyyMMdd-HHmmss>/` | `<Target>-a.png`、`<Target>-kana.png` |
 | `badge-preview.exe` | 引数で指定 | 例: `local/checks/badges.png` |
-| `tools/package.ps1` | `dist/` | `ime-indicator-<バージョン>.zip` |
+| `tools/package.ps1` | `dist/` | `KanaCaret-<バージョン>.zip` |
 
-利用者の PC に書くもの: 設定 `%APPDATA%\ImeIndicator\settings.ini`、自動起動の Run キー、`--stats`(パス指定なし)のときの `%TEMP%\ime-indicator-stats.log`。
+利用者の PC に書くもの: 設定 `%APPDATA%\KanaCaret\settings.ini`、自動起動の Run キー、`--stats`(パス指定なし)のときの `%TEMP%\kanacaret-stats.log`。
 
 ## ツール
 
@@ -52,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File tools\check-app.ps1 -Target notepad -Im
 
 インジケーターを起動した状態で実行する。対象のアプリを開いて「abc」と入力し、インジケーターの位置(物理ピクセル)を表示して、周辺を撮影する。`-Ime` を付けると IME をオンにした「あ」も撮影し、最後に元へ戻す。Target は `notepad` / `explorer` / `start` / `terminal` / `settings`。
 
-- 実際にウィンドウを開いてキー入力するので、実行中はほかの操作をしない。
+- 実際にウィンドウを開いてキー入力するので、実行中はほかの操作をしない。利用者が他のアプリを操作していると、Windows は前面の切り替えを許さない。その場合、スクリプトは他のアプリに入力しないよう、キー入力の前に中止する(開いたウィンドウは閉じる)。
 - 自分で開いたウィンドウだけを閉じる。設定アプリは 1 つしか開けないので、開いていれば既存のウィンドウを使い、入力した文字を消して閉じずに残す。
 - 結果の `visible=True` と位置に加え、撮影した画像で、キャレットの真上に出ているかを目で確かめる。
 
