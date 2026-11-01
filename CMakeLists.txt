@@ -22,10 +22,11 @@ add_executable(KanaCaret WIN32
     src/Renderer.cpp
     src/Settings.cpp
     src/SettingsWindow.cpp
+    src/DarkMode.cpp
     resources/app.manifest
     resources/app.rc
 )
-target_link_libraries(KanaCaret PRIVATE imm32 oleacc ole32 oleaut32 shcore user32 gdi32 shell32 advapi32 d2d1 dwrite comctl32 comdlg32 dwmapi)
+target_link_libraries(KanaCaret PRIVATE imm32 oleacc ole32 oleaut32 shcore user32 gdi32 shell32 advapi32 d2d1 dwrite comctl32 comdlg32 dwmapi uxtheme)
 configure_file(resources/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h @ONLY)
 target_include_directories(KanaCaret PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 # 使わないコードを取り除く(exe の大半は静的リンクした C ランタイム)

@@ -15,11 +15,10 @@ public:
     void Destroy();
 
     void ShowAtCaret(const RECT& caret, ImeState state, Placement placement);
-    void ShowAtPoint(POINT pt, ImeState state);
     void Hide();
     void BringToTop();
     void SetTheme(const Theme& theme);
-    void SetStyle(int sizeDip, const FillChoice& kanaFill, const FillChoice& latinFill);
+    void SetStyle(const BadgeStyle& style);
 
 private:
     void Show(int boxX, int boxY, UINT dpi, ImeState state);
@@ -32,8 +31,7 @@ private:
     HWND hwnd_ = nullptr;
     Renderer* renderer_ = nullptr;
     Theme theme_;
-    int sizeDip_ = 22;
-    FillChoice kanaFill_, latinFill_;
+    BadgeStyle style_;
 
     // 描画済みの画像
     HDC memDC_ = nullptr;

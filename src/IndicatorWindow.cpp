@@ -8,7 +8,6 @@ namespace {
 
 constexpr wchar_t kClassName[] = L"HectareBase.KanaCaret.Indicator";
 constexpr int kMarginDip = 6;      // 影を描く余白(Renderer の影の広がり + 下へのずれ)
-constexpr int kGapDip = 4;         // キャレットとの間隔
 constexpr UINT kFadeInMs = 83;     // Fluent の Fast
 constexpr UINT kFadeOutMs = 167;   // Fluent の Normal
 constexpr UINT_PTR kAnimTimer = 1;
@@ -45,7 +44,7 @@ void IndicatorWindow::Destroy() {
 
 void IndicatorWindow::ShowAtCaret(const RECT& caret, ImeState state, Placement placement) {
     UINT dpi = MonitorDpi(caret);
-    int size = MulDiv(sizeDip_, dpi, 96), gap = MulDiv(kGapDip, dpi, 96);
+    int size = MulDiv(style_.sizeDip, dpi, 96), gap = MulDiv(style_.gapDip, dpi, 96);
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromRect(&caret, MONITOR_DEFAULTTONEAREST), &mi);
 
@@ -70,20 +69,6 @@ void IndicatorWindow::ShowAtCaret(const RECT& caret, ImeState state, Placement p
     Show(x, y, dpi, state);
 }
 
-void IndicatorWindow::ShowAtPoint(POINT pt, ImeState state) {
-    RECT r{pt.x, pt.y, pt.x + 1, pt.y + 1};
-    UINT dpi = MonitorDpi(r);
-    int size = MulDiv(sizeDip_, dpi, 96);
-    MONITORINFO mi{sizeof(mi)};
-    GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mi);
-
-    int x = pt.x - size / 2;
-    int y = pt.y - size - MulDiv(8, dpi, 96);
-    if (y < mi.rcWork.top) y = pt.y + MulDiv(24, dpi, 96);  // カーソルの下側へ
-    x = std::clamp<int>(x, mi.rcWork.left, mi.rcWork.right - size);
-    Show(x, y, dpi, state);
-}
-
 void IndicatorWindow::Hide() {
     if (!shown_) return;
     shown_ = false;
@@ -100,13 +85,11 @@ void IndicatorWindow::SetTheme(const Theme& theme) {
     if (mapped_) Redraw();
 }
 
-void IndicatorWindow::SetStyle(int sizeDip, const FillChoice& kanaFill, const FillChoice& latinFill) {
-    if (sizeDip == sizeDip_ && kanaFill == kanaFill_ && latinFill == latinFill_) return;
-    sizeDip_ = sizeDip;
-    kanaFill_ = kanaFill;
-    latinFill_ = latinFill;
+void IndicatorWindow::SetStyle(const BadgeStyle& style) {
+    if (style == style_) return;
+    style_ = style;
     dirty_ = true;
-    // 大きさが変わると位置も変わるので、次の表示で置き直す
+    // 大きさや間隔が変わると位置も変わるので、次の表示で置き直す
     if (mapped_) {
         ShowWindow(hwnd_, SW_HIDE);
         mapped_ = shown_ = false;
@@ -118,7 +101,7 @@ void IndicatorWindow::Show(int boxX, int boxY, UINT dpi, ImeState state) {
     if (dpi != dpi_ || state != state_ || dirty_) {
         dpi_ = dpi;
         state_ = state;
-        box_ = MulDiv(sizeDip_, dpi, 96);
+        box_ = MulDiv(style_.sizeDip, dpi, 96);
         margin_ = MulDiv(kMarginDip, dpi, 96);
         Redraw();
     }
@@ -136,7 +119,7 @@ void IndicatorWindow::Show(int boxX, int boxY, UINT dpi, ImeState state) {
     }
     if (!shown_) {
         shown_ = true;
-        Animate(255, kFadeInMs);
+        Animate((BYTE)(255 * style_.opacity / 100), kFadeInMs);
     }
 }
 
@@ -151,7 +134,8 @@ void IndicatorWindow::Redraw() {
         bitmapSize_ = size;
     }
     bool native = state_ == ImeState::Native;
-    BadgeColors colors = ColorsFor(theme_, theme_.dark, native, native ? kanaFill_ : latinFill_);
+    BadgeColors colors = ColorsFor(theme_, theme_.dark, native, native ? style_.kanaFill : style_.latinFill);
+    colors.shadowAlpha *= style_.shadow / 100.0f;
     if (!renderer_->DrawBadge(memDC_, size, size, margin_, box_, dpi_, state_, colors)) return;
     dirty_ = false;
 

@@ -127,36 +127,3 @@ bool Renderer::DrawBadge(HDC dc, int width, int height, int inset, int boxSize, 
     if (hr == D2DERR_RECREATE_TARGET) target_.Reset();
     return SUCCEEDED(hr);
 }
-
-HICON Renderer::CreateIcon(int size, ImeState state, const BadgeColors& colors) {
-    void* bits = nullptr;
-    HBITMAP color = CreateDib(size, size, &bits);
-    if (!color) return nullptr;
-    HDC dc = CreateCompatibleDC(nullptr);
-    HGDIOBJ old = SelectObject(dc, color);
-    BadgeColors flat = colors;
-    flat.shadowAlpha = 0;  // 小さいので影は付けない
-    bool ok = DrawBadge(dc, size, size, 0, size, GetDpiForSystem(), state, flat);
-    SelectObject(dc, old);
-    DeleteDC(dc);
-
-    HICON icon = nullptr;
-    if (ok) {
-        // アイコンはプリマルチプライドではない(ストレートアルファ)ので戻す
-        auto* px = static_cast<BYTE*>(bits);
-        for (int i = 0; i < size * size; ++i, px += 4) {
-            BYTE a = px[3];
-            if (a != 0 && a != 255) {
-                px[0] = (BYTE)std::min(255, px[0] * 255 / a);
-                px[1] = (BYTE)std::min(255, px[1] * 255 / a);
-                px[2] = (BYTE)std::min(255, px[2] * 255 / a);
-            }
-        }
-        HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
-        ICONINFO ii{TRUE, 0, 0, mask, color};
-        icon = CreateIconIndirect(&ii);
-        DeleteObject(mask);
-    }
-    DeleteObject(color);
-    return icon;
-}

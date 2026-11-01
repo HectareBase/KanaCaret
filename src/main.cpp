@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <cwchar>
@@ -11,6 +12,7 @@
 #include <unordered_set>
 
 #include "CaretLocator.h"
+#include "DarkMode.h"
 #include "ImeMonitor.h"
 #include "IndicatorWindow.h"
 #include "Renderer.h"
@@ -83,7 +85,7 @@ void FlushStats(ULONGLONG now) {
 
 // 通知領域のメニューのコマンド(その他の設定は設定画面で変える)
 enum Command : UINT {
-    kCmdSettings = 100, kCmdExclude, kCmdPause, kCmdExit,
+    kCmdSettings = 100, kCmdPause, kCmdExit,
 };
 
 struct App {
@@ -95,7 +97,6 @@ struct App {
     Theme theme;
     IndicatorWindow indicator;
     TrayIcon tray;
-    ImeState trayState = ImeState::Direct;
     UiaWorker uia;
     UINT taskbarCreatedMsg = 0;
     HWINEVENTHOOK hooks[5] = {};  // 0, 1, 4: フォアグラウンド、フォーカス、移動・サイズ変更(全体)、2, 3: キャレット(フォーカス中のアプリ)
@@ -115,8 +116,6 @@ struct App {
     RECT lastCaret{};
     ULONGLONG lastCaretOk = 0;
     ULONGLONG lastLocate = 0;
-    ULONGLONG flashUntil = 0;  // IME 切り替え後、キャレットが取れなければマウス位置に出す期限
-    POINT flashPt{};
     ULONGLONG showUntil = 0;   // 「切り替え時だけ表示」で表示を続ける期限
     bool fullscreen = false;
     ULONGLONG fullscreenChecked = 0;
@@ -165,25 +164,15 @@ bool IsFullscreenBusy(ULONGLONG now) {
     return g.fullscreen;
 }
 
-// 通知領域のアイコンも、いまの IME 状態のバッジにする(タスクバーは Windows のテーマに従う)
-void UpdateTrayIcon(ImeState state) {
-    g.trayState = state;
-    int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(g.main));
-    bool native = state == ImeState::Native;
-    const FillChoice& fill = native ? g.settings.kanaFill : g.settings.latinFill;
-    g.tray.SetIcon(g.renderer.CreateIcon(size, state, ColorsFor(g.theme, g.theme.systemDark, native, fill)));
-}
-
 void ApplyTheme() {
     g.theme = LoadTheme();
+    RefreshDarkMode();  // 通知領域のメニューもアプリのテーマに合わせる
     g.indicator.SetTheme(g.theme);
     g.settingsWindow.SetTheme(g.theme);
-    UpdateTrayIcon(g.trayState);
 }
 
 void ApplySettings() {
-    g.indicator.SetStyle(g.settings.sizeDip, g.settings.kanaFill, g.settings.latinFill);
-    UpdateTrayIcon(g.trayState);
+    g.indicator.SetStyle(g.settings.style);
 }
 
 // Chromium/Electron の UIA は古い位置を返すことがあるため(docs/app-compatibility.md)、MSAA だけを使う
@@ -286,11 +275,9 @@ void Update(Reason reason) {
         g.indicator.Hide();
         return;
     }
-    if (ime != g.trayState) UpdateTrayIcon(ime);
     if (ime != g.lastIme) {
         g.lastIme = ime;
-        g.flashUntil = g.showUntil = now + kFlashMs;
-        GetCursorPos(&g.flashPt);
+        g.showUntil = now + kFlashMs;
     }
 
     // 表示モードで隠す間は、キャレットの位置も問い合わせない(CPU を使わない)
@@ -353,8 +340,8 @@ void Update(Reason reason) {
         caret = g.lastCaret;
     }
 
+    // 入力位置が分からなければ表示しない(マウスの位置に出す案は廃止した。docs/decisions.md)
     if (ok) g.indicator.ShowAtCaret(caret, ime, g.settings.placement);
-    else if (g.settings.mouseFallback && now < g.flashUntil) g.indicator.ShowAtPoint(g.flashPt, ime);
     else g.indicator.Hide();
 }
 
@@ -371,32 +358,20 @@ void OpenSettings() {
 }
 
 HMENU BuildMenu() {
-    const Settings& s = g.settings;
-    auto check = [](bool on) { return MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED); };
-
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kCmdSettings, L"設定(&S)...");
     SetMenuDefaultItem(menu, kCmdSettings, FALSE);  // アイコンのクリックで開くものを太字で示す
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    if (!g.focusExe.empty()) {
-        std::wstring label = L"「" + g.focusExe + L"」では表示しない";
-        AppendMenuW(menu, check(s.IsExcluded(g.focusExe)), kCmdExclude, label.c_str());
-    }
-    AppendMenuW(menu, check(g.paused), kCmdPause, L"一時停止(&P)");
+    AppendMenuW(menu, MF_STRING | (g.paused ? MF_CHECKED : MF_UNCHECKED), kCmdPause, L"一時停止(&P)");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCmdExit, L"終了(&X)");
     return menu;
 }
 
 void OnCommand(UINT cmd) {
-    Settings& s = g.settings;
     if (cmd == kCmdSettings) {
         OpenSettings();
         return;
-    } else if (cmd == kCmdExclude) {
-        s.ToggleExclude(g.focusExe);
-        s.Save();
-        g.settingsWindow.Refresh();
     } else if (cmd == kCmdPause) {
         g.paused = !g.paused;
     } else if (cmd == kCmdExit) {
@@ -574,10 +549,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR cmdLine, int) {
                              nullptr, instance, nullptr);
     if (!g.main || !g.renderer.Init() || !g.indicator.Create(instance, &g.renderer)) return 1;
 
+    InitDarkMode();
     g.settings.Load();
     ApplySettings();
     ApplyTheme();
     g.taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
+    // 通知領域のアイコンは exe のアイコン(状態によって変えない)
+    HICON icon = nullptr;
+    if (SUCCEEDED(LoadIconMetric(instance, MAKEINTRESOURCEW(1), LIM_SMALL, &icon))) g.tray.SetIcon(icon);
     g.tray.Add(g.main, kTrayMsg);
     g.uia.Start(g.main, kUiaResultMsg);
     InstallHooks();

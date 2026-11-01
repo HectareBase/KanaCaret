@@ -32,8 +32,6 @@ Theme LoadTheme() {
     Theme t;
     DWORD light = 1;
     if (ReadDword(kPersonalize, L"AppsUseLightTheme", light)) t.dark = light == 0;
-    light = 1;
-    if (ReadDword(kPersonalize, L"SystemUsesLightTheme", light)) t.systemDark = light == 0;
 
     // AccentPalette は 8 色 × RGBA。0..2 = Light3..Light1、3 = 基本色、4..6 = Dark1..Dark3
     BYTE palette[32];

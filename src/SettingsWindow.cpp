@@ -8,12 +8,15 @@
 #include <algorithm>
 #include <iterator>
 
+#include "DarkMode.h"
 #include "version.h"  // CMakeLists.txt のバージョン番号から生成される
+
+using Microsoft::WRL::ComPtr;
 
 namespace {
 
 constexpr wchar_t kClassName[] = L"HectareBase.KanaCaret.Settings";
-constexpr int kClientW = 680, kClientH = 470;  // DIP
+constexpr int kClientW = 680, kClientH = 560;  // DIP
 constexpr int kNavItemH = 36;
 constexpr int kContentX = 196, kContentW = 460;
 constexpr int kSwatchDip = 32, kSwatchGapDip = 6, kSwatchBadgeDip = 24;
@@ -21,15 +24,37 @@ constexpr int kMarginDip = 6;  // バッジの影の余白(IndicatorWindow と�
 
 enum ControlId : int {
     kIdNav = 1000,
-    kIdMode, kIdPlacement, kIdMouseFallback,
-    kIdSize, kIdSizeValue, kIdPreview,
+    kIdMode, kIdPlacement, kIdPreview,
     kIdAppList, kIdAppEdit, kIdAppAdd, kIdAppRemove, kIdAppRecent,
     kIdAutostart,
+    kIdSize = 1020, kIdOpacity, kIdGap, kIdShadow,  // スライダー
     kIdKanaSwatch = 1100,   // + 見本の番号
     kIdLatinSwatch = 1200,
+    kIdValueOffset = 500,   // スライダーの値を出す文字は、スライダーの ID + これ
 };
 
 const wchar_t* const kPages[] = {L"表示", L"見た目", L"アプリ", L"全般"};
+
+// 見た目のページのスライダー
+struct SliderDef {
+    int id;
+    const wchar_t* label;
+    int min, max, line, page;
+    const wchar_t* unit;
+    int BadgeStyle::*field;
+};
+const SliderDef kSliders[] = {
+    {kIdSize, L"大きさ", kMinSizeDip, kMaxSizeDip, 1, 2, L" px", &BadgeStyle::sizeDip},
+    {kIdOpacity, L"不透明度", kMinOpacity, kMaxOpacity, 5, 10, L"%", &BadgeStyle::opacity},
+    {kIdGap, L"キャレットとの間隔", 0, kMaxGapDip, 1, 2, L" px", &BadgeStyle::gapDip},
+    {kIdShadow, L"影の濃さ", 0, kMaxShadow, 10, 20, L"%", &BadgeStyle::shadow},
+};
+
+const SliderDef* FindSlider(int id) {
+    for (const SliderDef& d : kSliders)
+        if (d.id == id) return &d;
+    return nullptr;
+}
 
 // 見本の色(Windows のアクセントカラーの候補から選んだもの)
 struct Preset {
@@ -86,6 +111,14 @@ std::wstring WindowText(HWND hwnd) {
     return s;
 }
 
+COLORREF ToColorRef(const D2D1_COLOR_F& c) {
+    return RGB((BYTE)(c.r * 255 + 0.5f), (BYTE)(c.g * 255 + 0.5f), (BYTE)(c.b * 255 + 0.5f));
+}
+
+D2D1_COLOR_F ToD2D(COLORREF c) { return D2D1::ColorF(GetRValue(c) / 255.0f, GetGValue(c) / 255.0f, GetBValue(c) / 255.0f); }
+
+bool FocusCuesHidden(HWND ctl) { return (SendMessageW(ctl, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS) != 0; }
+
 }  // namespace
 
 void SettingsWindow::Open(HINSTANCE instance, Settings* settings, Renderer* renderer, std::function<void()> changed) {
@@ -101,13 +134,13 @@ void SettingsWindow::Open(HINSTANCE instance, Settings* settings, Renderer* rend
 
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
+    if (!d2d_) D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_.GetAddressOf());
 
     WNDCLASSEXW wc{sizeof(wc)};
     if (!GetClassInfoExW(instance, kClassName, &wc)) {
         wc.lpfnWndProc = WndProc;
         wc.hInstance = instance;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
         wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
         wc.hIconSm = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                        GetSystemMetrics(SM_CYSMICON), 0);
@@ -128,7 +161,8 @@ void SettingsWindow::Open(HINSTANCE instance, Settings* settings, Renderer* rend
     RECT r{0, 0, S(kClientW), S(kClientH)};
     AdjustWindowRectExForDpi(&r, style, FALSE, 0, dpi_);
     int w = r.right - r.left, h = r.bottom - r.top;
-    int x = (mi.rcWork.left + mi.rcWork.right - w) / 2, y = (mi.rcWork.top + mi.rcWork.bottom - h) / 2;
+    int x = (mi.rcWork.left + mi.rcWork.right - w) / 2;
+    int y = std::max<int>(mi.rcWork.top, (mi.rcWork.top + mi.rcWork.bottom - h) / 2);
 
     hwnd_ = CreateWindowExW(0, kClassName, L"KanaCaret の設定", style, x, y, w, h, nullptr, nullptr, instance, this);
     if (!hwnd_) return;
@@ -138,6 +172,7 @@ void SettingsWindow::Open(HINSTANCE instance, Settings* settings, Renderer* rend
 
     CreateFonts();
     CreateControls();
+    ApplyPalette();
     Layout();
     Refresh();
     ShowPage(page_);
@@ -155,7 +190,7 @@ bool SettingsWindow::PreTranslate(MSG* msg) {
 
 void SettingsWindow::SetTheme(const Theme& theme) {
     theme_ = theme;
-    if (hwnd_) InvalidateRect(hwnd_, nullptr, TRUE);
+    if (hwnd_) ApplyPalette();
 }
 
 void SettingsWindow::SetRecentApp(const std::wstring& exe) {
@@ -185,23 +220,28 @@ void SettingsWindow::CreateControls() {
     HWND mode = Add(0, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, kIdMode, x, 90, 300, 200);
     for (const wchar_t* s : {L"入力欄にいる間は常に表示", L"切り替えたときだけ表示", L"日本語入力のときだけ表示"})
         SendMessageW(mode, CB_ADDSTRING, 0, (LPARAM)s);
-    Add(0, WC_STATICW, L"位置", 0, 0, x, 134, w, 20);
-    HWND place = Add(0, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, kIdPlacement, x, 156, 300, 200);
+
+    // 見た目: 左に項目名、右に部品を並べる
+    const int labelW = 118, ctlX = x + labelW;
+    Add(1, WC_STATICW, kPages[1], 0, 0, x, 16, w, 32, true);
+    Add(1, WC_STATICW, L"位置", 0, 0, x, 68, labelW, 20);
+    HWND place = Add(1, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, kIdPlacement, ctlX, 64, 262, 200);
     for (const wchar_t* s : {L"キャレットの上", L"キャレットの右上", L"キャレットの下"})
         SendMessageW(place, CB_ADDSTRING, 0, (LPARAM)s);
-    Add(0, WC_BUTTONW, L"入力位置が分からないときは、IME の切り替え時にマウスの位置に表示する",
-        WS_TABSTOP | BS_AUTOCHECKBOX | BS_MULTILINE, kIdMouseFallback, x, 204, w, 40);
-
-    // 見た目
-    Add(1, WC_STATICW, kPages[1], 0, 0, x, 16, w, 32, true);
-    Add(1, WC_STATICW, L"大きさ", 0, 0, x, 68, w, 20);
-    HWND size = Add(1, TRACKBAR_CLASSW, L"大きさ", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, kIdSize, x - 6, 90, 330, 30);
-    SendMessageW(size, TBM_SETRANGE, FALSE, MAKELPARAM(kMinSizeDip, kMaxSizeDip));
-    SendMessageW(size, TBM_SETPAGESIZE, 0, 2);
-    Add(1, WC_STATICW, L"", 0, kIdSizeValue, x + 334, 95, 80, 20);
+    for (int i = 0; i < (int)std::size(kSliders); ++i) {
+        const SliderDef& d = kSliders[i];
+        int y = 104 + i * 36;
+        Add(1, WC_STATICW, d.label, 0, 0, x, y + 6, labelW, 20);
+        HWND tb = Add(1, TRACKBAR_CLASSW, d.label, WS_TABSTOP | TBS_HORZ | TBS_NOTICKS | TBS_FIXEDLENGTH, d.id,
+                      ctlX - 6, y, 274, 32);
+        SendMessageW(tb, TBM_SETRANGE, FALSE, MAKELPARAM(d.min, d.max));
+        SendMessageW(tb, TBM_SETLINESIZE, 0, d.line);
+        SendMessageW(tb, TBM_SETPAGESIZE, 0, d.page);
+        Add(1, WC_STATICW, L"", 0, d.id + kIdValueOffset, ctlX + 276, y + 6, 70, 20);
+    }
     for (int row = 0; row < 2; ++row) {
         bool kana = row == 0;
-        int y = kana ? 140 : 214;
+        int y = kana ? 256 : 324;
         Add(1, WC_STATICW, kana ? L"「あ」の色(日本語入力)" : L"「a」の色(直接入力)", 0, 0, x, y, w, 20);
         for (int i = 0; i < SwatchCount(kana); ++i) {
             HWND sw = Add(1, WC_BUTTONW, SwatchName(kana, i), WS_TABSTOP | BS_OWNERDRAW | (i == 0 ? WS_GROUP : 0),
@@ -219,8 +259,7 @@ void SettingsWindow::CreateControls() {
             SendMessageW(tooltip_, TTM_ADDTOOLW, 0, (LPARAM)&ti);
         }
     }
-    Add(1, WC_STATICW, L"プレビュー", 0, 0, x, 288, w, 20);
-    Add(1, WC_STATICW, L"", SS_OWNERDRAW, kIdPreview, x, 310, w, 130);
+    Add(1, WC_STATICW, L"", SS_OWNERDRAW, kIdPreview, x, 396, w, 144);
 
     // アプリ
     Add(2, WC_STATICW, kPages[2], 0, 0, x, 16, w, 32, true);
@@ -235,7 +274,7 @@ void SettingsWindow::CreateControls() {
 
     // 全般
     Add(3, WC_STATICW, kPages[3], 0, 0, x, 16, w, 32, true);
-    Add(3, WC_BUTTONW, L"Windows の起動時に実行", WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart, x, 68, w, 24);
+    Add(3, WC_BUTTONW, L"Windows の起動時に実行", WS_TABSTOP | BS_AUTOCHECKBOX, kIdAutostart, x, 68, w, 28);
     Add(3, WC_STATICW, L"KanaCaret バージョン " APP_VERSION_STR, 0, 0, x, 116, w, 20);
     Add(3, WC_STATICW, L"設定は %APPDATA%\\KanaCaret\\settings.ini に保存されます。", 0, 0, x, 140, w, 20);
 }
@@ -252,11 +291,56 @@ void SettingsWindow::CreateFonts() {
     headingFont_ = CreateFontIndirectW(&heading);
 }
 
+// アプリのテーマ(ライト/ダーク)とハイコントラストから配色を決め、標準のコントロールのテーマも切り替える
+void SettingsWindow::ApplyPalette() {
+    Palette& p = palette_;
+    if (theme_.highContrast) {
+        p = {false,
+             GetSysColor(COLOR_WINDOW),   GetSysColor(COLOR_WINDOWTEXT), GetSysColor(COLOR_GRAYTEXT),
+             GetSysColor(COLOR_BTNFACE),  GetSysColor(COLOR_WINDOW),     GetSysColor(COLOR_WINDOWTEXT),
+             GetSysColor(COLOR_GRAYTEXT), GetSysColor(COLOR_HIGHLIGHT),  GetSysColor(COLOR_HIGHLIGHTTEXT)};
+    } else if (theme_.dark && DarkModeAvailable()) {
+        // Fluent のダークの色(背景、文字、ControlFill、ControlStrongStroke など)
+        p = {true,
+             RGB(32, 32, 32),    RGB(255, 255, 255), RGB(197, 197, 197),
+             RGB(45, 45, 45),    RGB(43, 43, 43),    RGB(154, 154, 154),
+             RGB(120, 120, 120), ToColorRef(theme_.accentLight2), RGB(0, 0, 0)};
+    } else {
+        p = {false,
+             RGB(243, 243, 243), RGB(27, 27, 27),    RGB(96, 96, 96),
+             RGB(234, 234, 234), RGB(255, 255, 255), RGB(138, 138, 138),
+             RGB(196, 196, 196), ToColorRef(theme_.accentDark1), RGB(255, 255, 255)};
+    }
+    if (bgBrush_) DeleteObject(bgBrush_);
+    if (controlBrush_) DeleteObject(controlBrush_);
+    bgBrush_ = CreateSolidBrush(p.bg);
+    controlBrush_ = CreateSolidBrush(p.controlBg);
+
+    SetWindowDark(hwnd_, p.dark);
+    for (const Item& it : items_) {
+        wchar_t cls[32] = L"";
+        GetClassNameW(it.hwnd, cls, _countof(cls));
+        if (!_wcsicmp(cls, WC_COMBOBOXW)) {
+            SetControlDark(it.hwnd, p.dark, L"DarkMode_CFD");
+            COMBOBOXINFO cbi{sizeof(cbi)};
+            if (GetComboBoxInfo(it.hwnd, &cbi)) SetControlDark(cbi.hwndList, p.dark, L"DarkMode_Explorer");
+        } else if (!_wcsicmp(cls, WC_EDITW)) {
+            SetControlDark(it.hwnd, p.dark, L"DarkMode_CFD");
+        } else if (!_wcsicmp(cls, WC_LISTBOXW) ||
+                   (!_wcsicmp(cls, WC_BUTTONW) && (GetWindowLongW(it.hwnd, GWL_STYLE) & BS_TYPEMASK) == BS_PUSHBUTTON)) {
+            SetControlDark(it.hwnd, p.dark, L"DarkMode_Explorer");
+        }
+    }
+    if (tooltip_) SetControlDark(tooltip_, p.dark, L"DarkMode_Explorer");
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
+
 void SettingsWindow::Layout() {
     for (const Item& it : items_) {
         SendMessageW(it.hwnd, WM_SETFONT, (WPARAM)(it.heading ? headingFont_ : font_), FALSE);
         SetWindowPos(it.hwnd, nullptr, S(it.x), S(it.y), S(it.w), S(it.h), SWP_NOZORDER | SWP_NOACTIVATE);
     }
+    for (const SliderDef& d : kSliders) SendDlgItemMessageW(hwnd_, d.id, TBM_SETTHUMBLENGTH, S(20), 0);
     SendDlgItemMessageW(hwnd_, kIdNav, LB_SETITEMHEIGHT, 0, S(kNavItemH));
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
@@ -273,9 +357,11 @@ void SettingsWindow::Refresh() {
     const Settings& s = *settings_;
     SendDlgItemMessageW(hwnd_, kIdMode, CB_SETCURSEL, (WPARAM)s.mode, 0);
     SendDlgItemMessageW(hwnd_, kIdPlacement, CB_SETCURSEL, (WPARAM)s.placement, 0);
-    CheckDlgButton(hwnd_, kIdMouseFallback, s.mouseFallback ? BST_CHECKED : BST_UNCHECKED);
-    SendDlgItemMessageW(hwnd_, kIdSize, TBM_SETPOS, TRUE, s.sizeDip);
-    SetDlgItemTextW(hwnd_, kIdSizeValue, (std::to_wstring(s.sizeDip) + L" px").c_str());
+    for (const SliderDef& d : kSliders) {
+        int v = s.style.*d.field;
+        SendDlgItemMessageW(hwnd_, d.id, TBM_SETPOS, TRUE, v);
+        SetDlgItemTextW(hwnd_, d.id + kIdValueOffset, (std::to_wstring(v) + d.unit).c_str());
+    }
     CheckDlgButton(hwnd_, kIdAutostart, IsAutostartEnabled() ? BST_CHECKED : BST_UNCHECKED);
     RefreshAppList();
     InvalidateRect(hwnd_, nullptr, TRUE);
@@ -308,9 +394,7 @@ void SettingsWindow::OnCommand(int id, int code, HWND ctl) {
         Changed();
     } else if (id == kIdPlacement && code == CBN_SELCHANGE) {
         s.placement = (Placement)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
-        Changed();
-    } else if (id == kIdMouseFallback && code == BN_CLICKED) {
-        s.mouseFallback = IsDlgButtonChecked(hwnd_, id) == BST_CHECKED;
+        InvalidateRect(GetDlgItem(hwnd_, kIdPreview), nullptr, FALSE);
         Changed();
     } else if (id == kIdAutostart && code == BN_CLICKED) {
         SetAutostart(IsDlgButtonChecked(hwnd_, id) == BST_CHECKED);
@@ -351,8 +435,22 @@ void SettingsWindow::OnCommand(int id, int code, HWND ctl) {
     }
 }
 
+void SettingsWindow::OnSlider(HWND ctl) {
+    const SliderDef* d = FindSlider(GetDlgCtrlID(ctl));
+    if (!d) return;
+    // つまみを丸く大きく描いているので、つまみの矩形の外も含めて描き直す
+    InvalidateRect(ctl, nullptr, FALSE);
+    int pos = (int)SendMessageW(ctl, TBM_GETPOS, 0, 0);
+    int& value = settings_->style.*d->field;
+    if (pos == value) return;
+    value = pos;
+    SetDlgItemTextW(hwnd_, d->id + kIdValueOffset, (std::to_wstring(pos) + d->unit).c_str());
+    InvalidateRect(GetDlgItem(hwnd_, kIdPreview), nullptr, FALSE);
+    Changed();
+}
+
 void SettingsWindow::PickSwatch(bool kana, int index) {
-    FillChoice& fill = kana ? settings_->kanaFill : settings_->latinFill;
+    FillChoice& fill = kana ? settings_->style.kanaFill : settings_->style.latinFill;
     if (IsOther(kana, index)) {
         CHOOSECOLORW cc{sizeof(cc)};
         cc.hwndOwner = hwnd_;
@@ -364,11 +462,133 @@ void SettingsWindow::PickSwatch(bool kana, int index) {
     } else {
         fill = SwatchFill(kana, index);
     }
-    InvalidateRect(hwnd_, nullptr, FALSE);
     for (int i = 0; i < SwatchCount(kana); ++i)
         InvalidateRect(GetDlgItem(hwnd_, (kana ? kIdKanaSwatch : kIdLatinSwatch) + i), nullptr, FALSE);
     InvalidateRect(GetDlgItem(hwnd_, kIdPreview), nullptr, FALSE);
     Changed();
+}
+
+bool SettingsWindow::BeginD2D(HDC dc, const RECT& rc) {
+    if (!target_) {
+        // 不透明な DC に描くだけなので、アルファは使わない。小さな部品なので GPU は使わない
+        D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+            96.0f, 96.0f);
+        if (!d2d_ || FAILED(d2d_->CreateDCRenderTarget(&props, target_.GetAddressOf()))) return false;
+    }
+    if (FAILED(target_->BindDC(dc, &rc))) return false;
+    target_->BeginDraw();
+    target_->SetTransform(D2D1::Matrix3x2F::Translation(-(float)rc.left, -(float)rc.top));
+    return true;
+}
+
+void SettingsWindow::EndD2D() {
+    if (target_->EndDraw() == D2DERR_RECREATE_TARGET) target_.Reset();
+}
+
+ComPtr<ID2D1SolidColorBrush> SettingsWindow::Brush(COLORREF color) {
+    ComPtr<ID2D1SolidColorBrush> brush;
+    target_->CreateSolidColorBrush(ToD2D(color), &brush);
+    return brush;
+}
+
+LRESULT SettingsWindow::OnCustomDraw(NMCUSTOMDRAW* cd) {
+    int id = (int)cd->hdr.idFrom;
+    if (id == kIdAutostart) {
+        if (cd->dwDrawStage != CDDS_PREPAINT) return CDRF_DODEFAULT;
+        DrawCheckBox(cd);
+        return CDRF_SKIPDEFAULT;
+    }
+    if (FindSlider(id)) {
+        if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+        if (cd->dwDrawStage == CDDS_ITEMPREPAINT) {
+            DrawSliderPart(cd);
+            return CDRF_SKIPDEFAULT;
+        }
+    }
+    return CDRF_DODEFAULT;
+}
+
+// Windows 11 のチェックボックス: 角丸の箱。オンならアクセントで塗ってチェックを描く
+void SettingsWindow::DrawCheckBox(NMCUSTOMDRAW* cd) {
+    const Palette& p = palette_;
+    HDC dc = cd->hdc;
+    RECT rc = cd->rc;
+    FillRect(dc, &rc, bgBrush_);
+    bool checked = SendMessageW(cd->hdr.hwndFrom, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const float box = Sf(20), radius = Sf(4);
+    const float top = (rc.top + rc.bottom - box) / 2, left = (float)rc.left + Sf(1);
+    if (BeginD2D(dc, rc)) {
+        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(D2D1::RectF(left, top, left + box, top + box), radius, radius);
+        if (checked) {
+            target_->FillRoundedRectangle(rr, Brush(p.accent).Get());
+            ComPtr<ID2D1PathGeometry> path;
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(d2d_->CreatePathGeometry(&path)) && SUCCEEDED(path->Open(&sink))) {
+                sink->BeginFigure(D2D1::Point2F(left + box * 0.27f, top + box * 0.52f), D2D1_FIGURE_BEGIN_HOLLOW);
+                sink->AddLine(D2D1::Point2F(left + box * 0.43f, top + box * 0.68f));
+                sink->AddLine(D2D1::Point2F(left + box * 0.74f, top + box * 0.35f));
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                sink->Close();
+                target_->DrawGeometry(path.Get(), Brush(p.onAccent).Get(), Sf(1.6f));
+            }
+        } else {
+            D2D1_ROUNDED_RECT inner = rr;
+            inner.rect = D2D1::RectF(left + 0.5f, top + 0.5f, left + box - 0.5f, top + box - 0.5f);
+            target_->FillRoundedRectangle(inner, Brush(p.controlBg).Get());
+            target_->DrawRoundedRectangle(inner, Brush(p.stroke).Get(), 1.0f);
+        }
+        EndD2D();
+    }
+    wchar_t text[64] = L"";
+    GetWindowTextW(cd->hdr.hwndFrom, text, _countof(text));
+    HGDIOBJ oldFont = SelectObject(dc, font_);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, p.text);
+    RECT tr = rc;
+    tr.left = (LONG)(left + box) + S(8);
+    RECT measured = tr;
+    DrawTextW(dc, text, -1, &measured, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_CALCRECT);
+    DrawTextW(dc, text, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    SelectObject(dc, oldFont);
+    if ((cd->uItemState & CDIS_FOCUS) && !FocusCuesHidden(cd->hdr.hwndFrom)) {
+        int h = measured.bottom - measured.top;
+        RECT fr{tr.left - S(2), (rc.top + rc.bottom - h) / 2 - S(1), measured.right + S(2),
+                (rc.top + rc.bottom + h) / 2 + S(1)};
+        DrawFocusRect(dc, &fr);
+    }
+}
+
+// Windows 11 のスライダー: 細い角丸の溝(つまみより左はアクセント)と、丸いつまみ
+void SettingsWindow::DrawSliderPart(NMCUSTOMDRAW* cd) {
+    const Palette& p = palette_;
+    HWND tb = cd->hdr.hwndFrom;
+    RECT client;
+    GetClientRect(tb, &client);
+    RECT thumb{}, channel{};
+    SendMessageW(tb, TBM_GETTHUMBRECT, 0, (LPARAM)&thumb);
+    SendMessageW(tb, TBM_GETCHANNELRECT, 0, (LPARAM)&channel);
+    const float cx = (thumb.left + thumb.right) / 2.0f, cy = (thumb.top + thumb.bottom) / 2.0f;
+    if (cd->dwItemSpec == TBCD_CHANNEL) {
+        // 溝の描画のときに背景も塗る(つまみの外に描いた部分を消すため)
+        FillRect(cd->hdc, &client, bgBrush_);
+        if (!BeginD2D(cd->hdc, client)) return;
+        const float h = Sf(4), l = (float)channel.left, r = (float)channel.right;
+        D2D1_ROUNDED_RECT all = D2D1::RoundedRect(D2D1::RectF(l, cy - h / 2, r, cy + h / 2), h / 2, h / 2);
+        target_->FillRoundedRectangle(all, Brush(p.track).Get());
+        D2D1_ROUNDED_RECT done = D2D1::RoundedRect(D2D1::RectF(l, cy - h / 2, cx, cy + h / 2), h / 2, h / 2);
+        target_->FillRoundedRectangle(done, Brush(p.accent).Get());
+        EndD2D();
+    } else if (cd->dwItemSpec == TBCD_THUMB) {
+        if (!BeginD2D(cd->hdc, client)) return;
+        const float outer = Sf(10), inner = Sf(6);
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), outer, outer),
+                             Brush(p.dark ? RGB(69, 69, 69) : RGB(255, 255, 255)).Get());
+        target_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), outer - 0.5f, outer - 0.5f),
+                             Brush(p.dark ? RGB(80, 80, 80) : RGB(214, 214, 214)).Get(), 1.0f);
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), inner, inner), Brush(p.accent).Get());
+        EndD2D();
+    }
 }
 
 void SettingsWindow::OnDrawItem(const DRAWITEMSTRUCT* dis) {
@@ -380,28 +600,24 @@ void SettingsWindow::OnDrawItem(const DRAWITEMSTRUCT* dis) {
 }
 
 void SettingsWindow::DrawNavItem(const DRAWITEMSTRUCT* dis) {
+    const Palette& p = palette_;
     HDC dc = dis->hDC;
     RECT rc = dis->rcItem;
-    FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
+    FillRect(dc, &rc, bgBrush_);
     if ((int)dis->itemID < 0) return;
-    bool selected = (dis->itemState & ODS_SELECTED) != 0;
-    if (selected) {
+    if ((dis->itemState & ODS_SELECTED) && BeginD2D(dc, rc)) {
         // Windows 11 の設定アプリのように、選んだ項目を薄く塗り、左端にアクセントの縦線を引く
-        RECT bg = rc;
-        InflateRect(&bg, -S(2), -S(2));
-        HGDIOBJ oldBrush = SelectObject(dc, GetSysColorBrush(COLOR_BTNFACE));
-        HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
-        RoundRect(dc, bg.left, bg.top, bg.right + 1, bg.bottom + 1, S(8), S(8));
-        SelectObject(dc, oldPen);
-        SelectObject(dc, oldBrush);
-        int cy = (rc.top + rc.bottom) / 2;
-        RECT bar{rc.left + S(4), cy - S(8), rc.left + S(7), cy + S(8)};
-        FillRect(dc, &bar, GetSysColorBrush(COLOR_HIGHLIGHT));
+        D2D1_RECT_F bg = D2D1::RectF(rc.left + Sf(2), rc.top + Sf(2), rc.right - Sf(2), rc.bottom - Sf(2));
+        target_->FillRoundedRectangle(D2D1::RoundedRect(bg, Sf(4), Sf(4)), Brush(p.navSelected).Get());
+        float cy = (rc.top + rc.bottom) / 2.0f;
+        D2D1_RECT_F bar = D2D1::RectF(rc.left + Sf(2), cy - Sf(8), rc.left + Sf(5), cy + Sf(8));
+        target_->FillRoundedRectangle(D2D1::RoundedRect(bar, Sf(1.5f), Sf(1.5f)), Brush(p.accent).Get());
+        EndD2D();
     }
     wchar_t text[32] = L"";
     SendMessageW(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    SetTextColor(dc, p.text);
     HGDIOBJ oldFont = SelectObject(dc, font_);
     RECT tr = rc;
     tr.left += S(16);
@@ -414,15 +630,17 @@ void SettingsWindow::DrawNavItem(const DRAWITEMSTRUCT* dis) {
     }
 }
 
-void SettingsWindow::DrawBadgeAt(HDC dc, int x, int y, int box, bool native, const BadgeColors& colors) {
+void SettingsWindow::DrawBadgeAt(HDC dc, int x, int y, int box, bool native, BadgeColors colors, int opacity,
+                                 int shadow) {
     int margin = S(kMarginDip), size = box + margin * 2;
     void* bits = nullptr;
     HBITMAP dib = CreateDib(size, size, &bits);
     if (!dib) return;
     HDC mem = CreateCompatibleDC(dc);
     HGDIOBJ old = SelectObject(mem, dib);
+    colors.shadowAlpha *= shadow / 100.0f;
     if (renderer_->DrawBadge(mem, size, size, margin, box, dpi_, native ? ImeState::Native : ImeState::Direct, colors)) {
-        BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        BLENDFUNCTION blend{AC_SRC_OVER, 0, (BYTE)(255 * opacity / 100), AC_SRC_ALPHA};
         GdiAlphaBlend(dc, x - margin, y - margin, size, size, mem, 0, 0, size, size, blend);
     }
     SelectObject(mem, old);
@@ -431,44 +649,46 @@ void SettingsWindow::DrawBadgeAt(HDC dc, int x, int y, int box, bool native, con
 }
 
 void SettingsWindow::DrawSwatch(const DRAWITEMSTRUCT* dis, bool kana, int index) {
+    const Palette& p = palette_;
     HDC dc = dis->hDC;
     RECT rc = dis->rcItem;
-    FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
-    const FillChoice& current = kana ? settings_->kanaFill : settings_->latinFill;
+    FillRect(dc, &rc, bgBrush_);
+    const FillChoice& current = kana ? settings_->style.kanaFill : settings_->style.latinFill;
     bool selected = SelectedSwatch(kana, current) == index;
     int box = S(kSwatchBadgeDip);
     int bx = (rc.left + rc.right - box) / 2, by = (rc.top + rc.bottom - box) / 2;
 
     if (IsOther(kana, index) && !selected) {
         // 「その他の色」: 点線の枠に「…」
-        HPEN pen = CreatePen(PS_DOT, 1, GetSysColor(COLOR_GRAYTEXT));
-        HGDIOBJ oldPen = SelectObject(dc, pen);
-        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        RoundRect(dc, bx, by, bx + box, by + box, S(10), S(10));
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(pen);
+        if (BeginD2D(dc, rc)) {
+            ComPtr<ID2D1StrokeStyle> dash;
+            d2d_->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_FLAT,
+                                                                D2D1_CAP_STYLE_FLAT, D2D1_LINE_JOIN_MITER, 10.0f,
+                                                                D2D1_DASH_STYLE_DASH),
+                                    nullptr, 0, &dash);
+            float r = box * 5.0f / 22;
+            D2D1_RECT_F f = D2D1::RectF(bx + 0.5f, by + 0.5f, bx + box - 0.5f, by + box - 0.5f);
+            target_->DrawRoundedRectangle(D2D1::RoundedRect(f, r, r), Brush(p.subtle).Get(), 1.0f, dash.Get());
+            EndD2D();
+        }
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+        SetTextColor(dc, p.text);
         HGDIOBJ oldFont = SelectObject(dc, font_);
         RECT tr{bx, by, bx + box, by + box};
         DrawTextW(dc, L"…", -1, &tr, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
         SelectObject(dc, oldFont);
     } else {
-        // 見本は実際のバッジと同じ絵にする(設定画面はライトの見た目なので、ライトの配色で描く)
+        // 見本は実際のバッジと同じ絵にする(画面のテーマの配色で描く)
         FillChoice fill = IsOther(kana, index) ? current : SwatchFill(kana, index);
-        DrawBadgeAt(dc, bx, by, box, kana, ColorsFor(theme_, false, kana, fill));
+        DrawBadgeAt(dc, bx, by, box, kana, ColorsFor(theme_, p.dark, kana, fill), 100, 100);
     }
 
-    if (selected) {
+    if (selected && BeginD2D(dc, rc)) {
         // アクセント色の見本の上でも見えるよう、選択の枠は文字の色で描く
-        HPEN pen = CreatePen(PS_SOLID, std::max(2, S(2)), GetSysColor(COLOR_WINDOWTEXT));
-        HGDIOBJ oldPen = SelectObject(dc, pen);
-        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        RoundRect(dc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1, S(12), S(12));
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(pen);
+        float w = Sf(2);
+        D2D1_RECT_F f = D2D1::RectF(rc.left + w / 2, rc.top + w / 2, rc.right - w / 2, rc.bottom - w / 2);
+        target_->DrawRoundedRectangle(D2D1::RoundedRect(f, Sf(7), Sf(7)), Brush(p.text).Get(), w);
+        EndD2D();
     }
     if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT)) {
         RECT fr = rc;
@@ -478,14 +698,17 @@ void SettingsWindow::DrawSwatch(const DRAWITEMSTRUCT* dis, bool kana, int index)
 }
 
 void SettingsWindow::DrawPreview(HDC dc, RECT rc) {
-    // ライトとダークの背景に、キャレットとその上のバッジを並べる(実際の配置と同じく、左端をキャレットにそろえる)
+    // ライトとダークの背景に、キャレットとバッジを実際の配置・間隔・不透明度・影で並べる
+    const BadgeStyle& style = settings_->style;
     const int halfW = (rc.right - rc.left) / 2;
-    const int box = S(settings_->sizeDip), gap = S(4), lineH = S(20);
+    const int box = S(style.sizeDip), gap = S(style.gapDip), lineH = S(20), caretW = std::max(1, S(1));
     HGDIOBJ oldFont = SelectObject(dc, font_);
     SetBkMode(dc, TRANSPARENT);
     for (int half = 0; half < 2; ++half) {
         bool dark = half == 1;
         RECT area{rc.left + half * halfW, rc.top, half ? rc.right : rc.left + halfW, rc.bottom};
+        int saved = SaveDC(dc);
+        IntersectClipRect(dc, area.left, area.top, area.right, area.bottom);
         HBRUSH bg = CreateSolidBrush(dark ? RGB(32, 32, 32) : RGB(243, 243, 243));
         FillRect(dc, &area, bg);
         DeleteObject(bg);
@@ -495,23 +718,35 @@ void SettingsWindow::DrawPreview(HDC dc, RECT rc) {
         SetTextColor(dc, dark ? RGB(160, 160, 160) : RGB(110, 110, 110));
         DrawTextW(dc, dark ? L"ダーク" : L"ライト", -1, &label, DT_SINGLELINE | DT_NOPREFIX);
 
-        int lineTop = area.bottom - S(16) - lineH;
+        int lineTop = (area.top + area.bottom - lineH) / 2;
         for (int j = 0; j < 2; ++j) {
             bool native = j == 0;
-            int caretX = area.left + S(84) + j * S(110);
-            RECT tr{caretX - S(70), lineTop, caretX - S(1), lineTop + lineH};
+            int caretX = area.left + S(70) + j * S(100);
+            RECT tr{caretX - S(60), lineTop, caretX - S(1), lineTop + lineH};
             SetTextColor(dc, textColor);
             DrawTextW(dc, native ? L"かな" : L"abc", -1, &tr, DT_SINGLELINE | DT_RIGHT | DT_VCENTER | DT_NOPREFIX);
-            RECT caret{caretX, lineTop, caretX + std::max(1, S(1)), lineTop + lineH};
+            RECT caret{caretX, lineTop, caretX + caretW, lineTop + lineH};
             HBRUSH caretBrush = CreateSolidBrush(textColor);
             FillRect(dc, &caret, caretBrush);
             DeleteObject(caretBrush);
-            const FillChoice& fill = native ? settings_->kanaFill : settings_->latinFill;
-            DrawBadgeAt(dc, caretX, lineTop - gap - box, box, native, ColorsFor(theme_, dark, native, fill));
+
+            // IndicatorWindow::ShowAtCaret と同じ配置
+            int bx = caretX, by = lineTop - gap - box;
+            if (settings_->placement == Placement::AboveRight) {
+                bx = caret.right + gap;
+                by = lineTop - box;
+            } else if (settings_->placement == Placement::Below) {
+                by = caret.bottom + gap;
+            }
+            const FillChoice& fill = native ? style.kanaFill : style.latinFill;
+            DrawBadgeAt(dc, bx, by, box, native, ColorsFor(theme_, dark, native, fill), style.opacity, style.shadow);
         }
+        RestoreDC(dc, saved);
     }
     SelectObject(dc, oldFont);
-    FrameRect(dc, &rc, GetSysColorBrush(COLOR_BTNSHADOW));
+    HBRUSH frame = CreateSolidBrush(palette_.stroke);
+    FrameRect(dc, &rc, frame);
+    DeleteObject(frame);
 }
 
 LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -525,16 +760,12 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (self) self->OnCommand(LOWORD(wp), HIWORD(wp), (HWND)lp);
         return 0;
     case WM_HSCROLL:
-        if (self && (HWND)lp == GetDlgItem(hwnd, kIdSize)) {
-            int pos = (int)SendMessageW((HWND)lp, TBM_GETPOS, 0, 0);
-            if (pos != self->settings_->sizeDip) {
-                self->settings_->sizeDip = pos;
-                SetDlgItemTextW(hwnd, kIdSizeValue, (std::to_wstring(pos) + L" px").c_str());
-                InvalidateRect(GetDlgItem(hwnd, kIdPreview), nullptr, FALSE);
-                self->Changed();
-            }
-        }
+        if (self && lp) self->OnSlider((HWND)lp);
         return 0;
+    case WM_NOTIFY:
+        if (self && reinterpret_cast<NMHDR*>(lp)->code == NM_CUSTOMDRAW)
+            return self->OnCustomDraw(reinterpret_cast<NMCUSTOMDRAW*>(lp));
+        break;
     case WM_MEASUREITEM:
         if (self && wp == kIdNav) {
             reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight = self->S(kNavItemH);
@@ -547,10 +778,31 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             return TRUE;
         }
         break;
-    case WM_CTLCOLORSTATIC:  // 文字・チェックボックス・スライダーの背景をウィンドウの背景に合わせる
-        SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
-        SetTextColor((HDC)wp, GetSysColor(COLOR_WINDOWTEXT));
-        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+    case WM_ERASEBKGND:
+        if (self && self->bgBrush_) {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect((HDC)wp, &rc, self->bgBrush_);
+            return TRUE;
+        }
+        break;
+    case WM_CTLCOLORSTATIC:  // 文字・スライダーの背景
+    case WM_CTLCOLORBTN:     // ボタンの角の外側
+        if (self && self->bgBrush_) {
+            SetBkColor((HDC)wp, self->palette_.bg);
+            SetTextColor((HDC)wp, self->palette_.text);
+            return (LRESULT)self->bgBrush_;
+        }
+        break;
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:  // 入力欄・一覧・コンボボックスの一覧(左のカテゴリだけは背景と同じ色)
+        if (self && self->controlBrush_) {
+            bool nav = (HWND)lp == GetDlgItem(hwnd, kIdNav);
+            SetBkColor((HDC)wp, nav ? self->palette_.bg : self->palette_.controlBg);
+            SetTextColor((HDC)wp, self->palette_.text);
+            return (LRESULT)(nav ? self->bgBrush_ : self->controlBrush_);
+        }
+        break;
     case WM_DPICHANGED:
         if (self) {
             self->dpi_ = HIWORD(wp);
@@ -566,10 +818,13 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         return 0;
     case WM_NCDESTROY:
         if (self) {
-            // 子ウィンドウはこの時点で破棄済みなので、フォントを消してよい
-            if (self->font_) DeleteObject(self->font_);
-            if (self->headingFont_) DeleteObject(self->headingFont_);
-            self->font_ = self->headingFont_ = nullptr;
+            // 子ウィンドウはこの時点で破棄済みなので、フォントやブラシを消してよい
+            for (HGDIOBJ* obj : {(HGDIOBJ*)&self->font_, (HGDIOBJ*)&self->headingFont_, (HGDIOBJ*)&self->bgBrush_,
+                                 (HGDIOBJ*)&self->controlBrush_}) {
+                if (*obj) DeleteObject(*obj);
+                *obj = nullptr;
+            }
+            self->target_.Reset();
             self->tooltip_ = nullptr;
             self->items_.clear();
             self->hwnd_ = nullptr;

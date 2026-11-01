@@ -18,9 +18,6 @@ public:
     bool DrawBadge(HDC dc, int width, int height, int inset, int boxSize, UINT dpi, ImeState state,
                    const BadgeColors& colors);
 
-    // 通知領域用のアイコン(size 四方)を作る。呼び出し側が DestroyIcon する
-    HICON CreateIcon(int size, ImeState state, const BadgeColors& colors);
-
 private:
     IDWriteTextFormat* Format(bool kana, float px);
     bool EnsureTarget();

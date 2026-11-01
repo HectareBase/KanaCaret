@@ -5,7 +5,6 @@
 // Windows の個人用設定から読み取った配色。
 struct Theme {
     bool dark = false;          // アプリのテーマ(インジケーターに使う)
-    bool systemDark = false;    // Windows のテーマ(タスクバー上のアイコンに使う)
     bool highContrast = false;
     bool animations = true;     // 「アニメーション効果」がオン
     D2D1_COLOR_F accentLight2{0.6f, 0.87f, 1.0f, 1.0f};  // ダークテーマでの塗り(AccentFillColorDefault)

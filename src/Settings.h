@@ -14,19 +14,28 @@ enum class DisplayMode {
 
 enum class Placement { Above, AboveRight, Below };
 
-// バッジの大きさ(DIP)の範囲と既定値
-constexpr int kMinSizeDip = 14;
-constexpr int kMaxSizeDip = 40;
-constexpr int kDefaultSizeDip = 22;
+// 見た目の設定の範囲と既定値
+constexpr int kMinSizeDip = 14, kMaxSizeDip = 40, kDefaultSizeDip = 22;  // 大きさ(DIP)
+constexpr int kMinOpacity = 30, kMaxOpacity = 100;                       // 不透明度(%)
+constexpr int kMaxGapDip = 16, kDefaultGapDip = 4;                       // キャレットとの間隔(DIP)
+constexpr int kMaxShadow = 200;                                          // 影の濃さ(既定の濃さに対する %)
+
+// バッジの見た目(位置以外)
+struct BadgeStyle {
+    int sizeDip = kDefaultSizeDip;
+    FillChoice kanaFill;   // 「あ」の塗り(Auto = アクセントカラー)
+    FillChoice latinFill;  // 「a」の塗り(Neutral は使わない)
+    int opacity = kMaxOpacity;
+    int gapDip = kDefaultGapDip;
+    int shadow = 100;
+    bool operator==(const BadgeStyle&) const = default;
+};
 
 // %APPDATA%\KanaCaret\settings.ini に保存する設定。
 struct Settings {
     DisplayMode mode = DisplayMode::Always;
     Placement placement = Placement::Above;
-    int sizeDip = kDefaultSizeDip;
-    FillChoice kanaFill;        // 「あ」の塗り(Auto = アクセントカラー)
-    FillChoice latinFill;       // 「a」の塗り(Neutral は使わない)
-    bool mouseFallback = true;  // キャレットが取れないとき、IME の切り替え時にマウスの位置へ出す
+    BadgeStyle style;
     std::vector<std::wstring> exclude;  // 表示しないアプリの exe 名(小文字)
 
     void Load();

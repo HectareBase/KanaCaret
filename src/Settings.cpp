@@ -73,12 +73,16 @@ void Settings::Load() {
     // SizeDip が無ければ、以前の 3 段階の Size(0 = 小、1 = 中、2 = 大)から読み替える
     constexpr int kOldSizes[] = {18, 22, 28};
     int oldSize = ReadInt(path, L"Size", 1);
-    sizeDip = std::clamp(ReadInt(path, L"SizeDip", kOldSizes[std::clamp(oldSize, 0, 2)]), kMinSizeDip, kMaxSizeDip);
+    style.sizeDip =
+        std::clamp(ReadInt(path, L"SizeDip", kOldSizes[std::clamp(oldSize, 0, 2)]), kMinSizeDip, kMaxSizeDip);
     // KanaColor が無ければ、以前の AccentKana(0 なら「a」と同じ配色)から読み替える
-    kanaFill = ReadFill(path, L"KanaColor", {ReadInt(path, L"AccentKana", 1) ? FillChoice::Auto : FillChoice::Neutral});
-    latinFill = ReadFill(path, L"LatinColor", {});
-    if (latinFill.kind == FillChoice::Neutral) latinFill = {};
-    mouseFallback = ReadInt(path, L"MouseFallback", mouseFallback) != 0;
+    style.kanaFill =
+        ReadFill(path, L"KanaColor", {ReadInt(path, L"AccentKana", 1) ? FillChoice::Auto : FillChoice::Neutral});
+    style.latinFill = ReadFill(path, L"LatinColor", {});
+    if (style.latinFill.kind == FillChoice::Neutral) style.latinFill = {};
+    style.opacity = std::clamp(ReadInt(path, L"Opacity", style.opacity), kMinOpacity, kMaxOpacity);
+    style.gapDip = std::clamp(ReadInt(path, L"GapDip", style.gapDip), 0, kMaxGapDip);
+    style.shadow = std::clamp(ReadInt(path, L"Shadow", style.shadow), 0, kMaxShadow);
 
     wchar_t buf[4096] = L"";
     GetPrivateProfileStringW(kSection, L"Exclude", L"", buf, _countof(buf), path.c_str());
@@ -107,13 +111,15 @@ void Settings::Save() const {
     }
     WriteInt(path, L"Mode", (int)mode);
     WriteInt(path, L"Placement", (int)placement);
-    WriteInt(path, L"SizeDip", sizeDip);
-    WriteFill(path, L"KanaColor", kanaFill);
-    WriteFill(path, L"LatinColor", latinFill);
-    // 以前のキーは、新しいキーと食い違わないよう消す
-    WritePrivateProfileStringW(kSection, L"Size", nullptr, path.c_str());
-    WritePrivateProfileStringW(kSection, L"AccentKana", nullptr, path.c_str());
-    WriteInt(path, L"MouseFallback", mouseFallback);
+    WriteInt(path, L"SizeDip", style.sizeDip);
+    WriteFill(path, L"KanaColor", style.kanaFill);
+    WriteFill(path, L"LatinColor", style.latinFill);
+    WriteInt(path, L"Opacity", style.opacity);
+    WriteInt(path, L"GapDip", style.gapDip);
+    WriteInt(path, L"Shadow", style.shadow);
+    // 以前のキーは、新しいキーと食い違わないよう消す(MouseFallback は廃止した設定)
+    for (const wchar_t* old : {L"Size", L"AccentKana", L"MouseFallback"})
+        WritePrivateProfileStringW(kSection, old, nullptr, path.c_str());
     std::wstring list;
     for (const std::wstring& e : exclude) list += (list.empty() ? L"" : L",") + e;
     WritePrivateProfileStringW(kSection, L"Exclude", list.c_str(), path.c_str());
