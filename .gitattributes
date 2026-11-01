@@ -1,0 +1,7 @@
+# 改行コードはリポジトリ内では LF にそろえ、Windows 専用のスクリプトだけ CRLF で取り出す
+* text=auto
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.rc text eol=crlf
+*.ico binary
+*.png binary

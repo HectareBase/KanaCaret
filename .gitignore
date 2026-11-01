@@ -1,0 +1,8 @@
+# ビルド成果物
+/build/
+/dist/
+
+# 手元だけの出力(計測ログやスクリーンショットには、使っているアプリ名・画面座標・画面の内容が含まれる)
+#   local/logs/    ime-probe と measure-load の記録
+#   local/checks/  check-app のスクリーンショット
+/local/

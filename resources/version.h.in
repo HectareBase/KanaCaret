@@ -1,0 +1,7 @@
+// CMakeLists.txt の project(VERSION) から生成される。直接編集しないこと
+#pragma once
+
+#define APP_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define APP_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define APP_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define APP_VERSION_STR "@PROJECT_VERSION@"
