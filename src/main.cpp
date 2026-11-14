@@ -37,6 +37,8 @@ constexpr ULONGLONG kTypingHideMs = 1000;  // 「入力中は隠す」で、最�
 // 表示し直してからこの時間の入力は数えない。GetLastInputInfo はキーやボタンを離したときにも進むので、
 // 入力欄のクリックや切り替えのキーを離しただけで隠れてしまう
 constexpr ULONGLONG kRevealGraceMs = 300;
+// マウスのキャプチャーの通知(ボタンを押した・離した)からこの時間の入力は、クリックとみなしてキー入力に数えない
+constexpr ULONGLONG kClickMs = 300;
 constexpr UINT kUiaResultMsg = WM_APP + 2;
 constexpr ULONGLONG kUiaPollMs = 250;      // UIA で取れるアプリ(通知が来ない)の問い合わせ間隔
 // キー入力やマウス操作が無い間は、IME の状態もキャレットもほとんど変わらないので問い合わせを減らす
@@ -103,7 +105,9 @@ struct App {
     TrayIcon tray;
     UiaWorker uia;
     UINT taskbarCreatedMsg = 0;
-    HWINEVENTHOOK hooks[5] = {};  // 0, 1, 4: フォアグラウンド、フォーカス、移動・サイズ変更(全体)、2, 3: キャレット(フォーカス中のアプリ)
+    // 0, 1, 4, 5: フォアグラウンド、フォーカス、移動・サイズ変更、マウスのキャプチャー(全体)、
+    // 2, 3: キャレット(フォーカス中のアプリ)
+    HWINEVENTHOOK hooks[6] = {};
     DWORD caretHookPid = 0;
     bool caretTimerPending = false;
     bool paused = false;
@@ -126,6 +130,8 @@ struct App {
     POINT lastCursor{};        // 前回見たマウスカーソルの位置
     ULONGLONG lastTyping = 0;  // 最後にキー入力とみなした時刻
     ULONGLONG revealAt = 0;    // IME の切り替えかフォーカスの移動で表示し直した時刻。これより後のキー入力で隠す
+    ULONGLONG lastClick = 0;   // 最後にマウスのキャプチャーの通知が来た時刻
+    bool typingHidden = false; // 入力中なので隠している
     bool fullscreen = false;
     ULONGLONG fullscreenChecked = 0;
     std::wstring focusExe;     // フォーカスのあるアプリの exe 名
@@ -164,13 +170,16 @@ std::wstring FocusKey(const FocusInfo& fi) {
 }
 
 // 入力の時刻(GetLastInputInfo)が進んだのにマウスカーソルが動いていなければ、キー入力とみなす。
-// キーボードのフックは使わない(docs/decisions.md)。その場でのクリックやホイールもキー入力に数えてしまう
+// キーボードのフックは使わない(docs/decisions.md)。クリックは、マウスのキャプチャーの通知(多くのアプリが
+// ボタンを押すと SetCapture する)の直後の入力として除く。キャプチャーしないアプリのクリックとホイールは、
+// キー入力に数えてしまう
 void TrackTyping(DWORD inputTime, ULONGLONG now) {
     POINT cursor{};
     GetCursorPos(&cursor);
     if (inputTime != g.lastInputTime) {
         g.lastInputTime = inputTime;
-        if (cursor.x == g.lastCursor.x && cursor.y == g.lastCursor.y) g.lastTyping = now;
+        if (cursor.x == g.lastCursor.x && cursor.y == g.lastCursor.y && now - g.lastClick >= kClickMs)
+            g.lastTyping = now;
     }
     g.lastCursor = cursor;
 }
@@ -324,9 +333,16 @@ void Update(Reason reason) {
     // 入力中は隠す(入力中の文字で日本語か英語か分かるため)。IME を切り替えた直後とフォーカスが移った直後は、
     // 次のキー入力まで表示する。切り替えのキーやクリック自体(押す・離す)で隠れないよう、
     // 表示し直してから kRevealGraceMs の間の入力は数えない
-    if (g.settings.hideWhileTyping && g.lastTyping > g.revealAt + kRevealGraceMs &&
-        now - g.lastTyping < kTypingHideMs)
+    bool typing = wanted && g.settings.hideWhileTyping && g.lastTyping > g.revealAt + kRevealGraceMs &&
+                  now - g.lastTyping < kTypingHideMs;
+    if (typing) {
+        g.typingHidden = true;
         wanted = false;
+    } else if (wanted && g.typingHidden) {
+        // 隠している間は入力位置を問い合わせていないので、定期確認を待たずにすぐ問い合わせる
+        g.typingHidden = false;
+        if (reason == Reason::Tick) reason = Reason::Caret;
+    }
     if (!wanted) {
         g.indicator.Hide();
         return;
@@ -433,6 +449,16 @@ void CALLBACK OnWinEvent(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject, L
         st.focusEvents++;
         Update(Reason::Focus);
         return;
+    case EVENT_SYSTEM_CAPTURESTART:  // クリック(「入力中は隠す」でキー入力と区別する)
+    case EVENT_SYSTEM_CAPTUREEND: {
+        if (!g.settings.hideWhileTyping) return;
+        ULONGLONG now = GetTickCount64();
+        g.lastClick = now;
+        // 通知より先に Update() がクリックの入力を見つけていたら、キー入力として数えたのを取り消す
+        if (now - g.lastTyping < kClickMs) g.lastTyping = 0;
+        Update(Reason::Caret);
+        return;
+    }
     case EVENT_SYSTEM_MOVESIZESTART:  // 開始ですぐ隠し、終了ですぐ出し直す(判定は Update() の GUI_INMOVESIZE)
     case EVENT_SYSTEM_MOVESIZEEND:
         Update(Reason::Caret);
@@ -467,6 +493,7 @@ void InstallHooks() {
     g.hooks[0] = Hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0);
     g.hooks[1] = Hook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, 0);
     g.hooks[4] = Hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, 0);
+    g.hooks[5] = Hook(EVENT_SYSTEM_CAPTURESTART, EVENT_SYSTEM_CAPTUREEND, 0);  // クリックのときだけ届く
 }
 
 // キャレットの表示・移動の通知は、フォーカスのあるアプリからだけ受け取る。
