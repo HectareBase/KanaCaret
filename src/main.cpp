@@ -33,6 +33,10 @@ constexpr UINT kTickMs = 100;              // IME 状態の確認間隔
 constexpr ULONGLONG kRelocateMs = 1000;    // 通知が来るアプリでも、取りこぼし対策としてこの間隔で問い合わせ直す
 constexpr ULONGLONG kCaretGraceMs = 300;   // 再描画のたびにキャレットを隠すアプリ対策
 constexpr ULONGLONG kFlashMs = 1500;       // 切り替え時だけ表示するときの表示時間
+constexpr ULONGLONG kTypingHideMs = 1000;  // 「入力中は隠す」で、最後のキー入力からこの時間は隠す
+// 表示し直してからこの時間の入力は数えない。GetLastInputInfo はキーやボタンを離したときにも進むので、
+// 入力欄のクリックや切り替えのキーを離しただけで隠れてしまう
+constexpr ULONGLONG kRevealGraceMs = 300;
 constexpr UINT kUiaResultMsg = WM_APP + 2;
 constexpr ULONGLONG kUiaPollMs = 250;      // UIA で取れるアプリ(通知が来ない)の問い合わせ間隔
 // キー入力やマウス操作が無い間は、IME の状態もキャレットもほとんど変わらないので問い合わせを減らす
@@ -117,6 +121,11 @@ struct App {
     ULONGLONG lastCaretOk = 0;
     ULONGLONG lastLocate = 0;
     ULONGLONG showUntil = 0;   // 「切り替え時だけ表示」で表示を続ける期限
+    // 「入力中は隠す」のための記録
+    DWORD lastInputTime = 0;   // 前回見た GetLastInputInfo の時刻
+    POINT lastCursor{};        // 前回見たマウスカーソルの位置
+    ULONGLONG lastTyping = 0;  // 最後にキー入力とみなした時刻
+    ULONGLONG revealAt = 0;    // IME の切り替えかフォーカスの移動で表示し直した時刻。これより後のキー入力で隠す
     bool fullscreen = false;
     ULONGLONG fullscreenChecked = 0;
     std::wstring focusExe;     // フォーカスのあるアプリの exe 名
@@ -152,6 +161,18 @@ std::wstring FocusKey(const FocusInfo& fi) {
     wchar_t cls[128] = L"";
     GetClassNameW(fi.focus, cls, _countof(cls));
     return ExeName(fi.pid) + L"|" + cls;
+}
+
+// 入力の時刻(GetLastInputInfo)が進んだのにマウスカーソルが動いていなければ、キー入力とみなす。
+// キーボードのフックは使わない(docs/decisions.md)。その場でのクリックやホイールもキー入力に数えてしまう
+void TrackTyping(DWORD inputTime, ULONGLONG now) {
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    if (inputTime != g.lastInputTime) {
+        g.lastInputTime = inputTime;
+        if (cursor.x == g.lastCursor.x && cursor.y == g.lastCursor.y) g.lastTyping = now;
+    }
+    g.lastCursor = cursor;
 }
 
 // フルスクリーンのアプリ・ゲーム・プレゼンテーション中か(問い合わせは 1 秒に 1 回まで)
@@ -235,6 +256,7 @@ void Update(Reason reason) {
         g.focusTarget = g.settings.IsTarget(g.focusExe);
         g.preferUia = g.uiaKeys.count(g.focusKey) != 0;
         g.showUntil = now + kFlashMs;
+        g.revealAt = now;
         g.indicator.BringToTop();
         // フックの付け替えは、通知の処理中を避けてメッセージループに戻ってから行う。
         // 対象外のアプリからはキャレットの通知を受けない
@@ -272,6 +294,7 @@ void Update(Reason reason) {
     LASTINPUTINFO input{sizeof(input)};
     GetLastInputInfo(&input);
     DWORD sinceInput = GetTickCount() - input.dwTime;
+    TrackTyping(input.dwTime, now);
     ImeState ime = g.lastIme;
     bool imeDue = reason == Reason::Focus || ime == ImeState::Unknown || now - g.lastImeQuery >= kImeIdlePollMs ||
                   (sinceInput < kImeActiveMs && now - g.lastImeQuery >= kTickMs);
@@ -288,6 +311,7 @@ void Update(Reason reason) {
     if (ime != g.lastIme) {
         g.lastIme = ime;
         g.showUntil = now + kFlashMs;
+        g.revealAt = now;
     }
 
     // 表示モードで隠す間は、キャレットの位置も問い合わせない(CPU を使わない)
@@ -297,6 +321,12 @@ void Update(Reason reason) {
     case DisplayMode::OnChange: wanted = now < g.showUntil; break;
     case DisplayMode::NativeOnly: wanted = ime == ImeState::Native; break;
     }
+    // 入力中は隠す(入力中の文字で日本語か英語か分かるため)。IME を切り替えた直後とフォーカスが移った直後は、
+    // 次のキー入力まで表示する。切り替えのキーやクリック自体(押す・離す)で隠れないよう、
+    // 表示し直してから kRevealGraceMs の間の入力は数えない
+    if (g.settings.hideWhileTyping && g.lastTyping > g.revealAt + kRevealGraceMs &&
+        now - g.lastTyping < kTypingHideMs)
+        wanted = false;
     if (!wanted) {
         g.indicator.Hide();
         return;

@@ -70,6 +70,7 @@ void Settings::Load() {
     if (path.empty()) return;
     mode = ReadEnum(path, L"Mode", mode, DisplayMode::NativeOnly);
     placement = ReadEnum(path, L"Placement", placement, Placement::Below);
+    hideWhileTyping = ReadInt(path, L"HideWhileTyping", hideWhileTyping) != 0;
     // SizeDip が無ければ、以前の 3 段階の Size(0 = 小、1 = 中、2 = 大)から読み替える
     constexpr int kOldSizes[] = {18, 22, 28};
     int oldSize = ReadInt(path, L"Size", 1);
@@ -112,6 +113,7 @@ void Settings::Save() const {
     }
     WriteInt(path, L"Mode", (int)mode);
     WriteInt(path, L"Placement", (int)placement);
+    WriteInt(path, L"HideWhileTyping", hideWhileTyping);
     WriteInt(path, L"SizeDip", style.sizeDip);
     WriteFill(path, L"KanaColor", style.kanaFill);
     WriteFill(path, L"LatinColor", style.latinFill);

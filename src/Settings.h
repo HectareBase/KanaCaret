@@ -34,6 +34,7 @@ struct BadgeStyle {
 // %APPDATA%\KanaCaret\settings.ini に保存する設定。
 struct Settings {
     DisplayMode mode = DisplayMode::Always;
+    bool hideWhileTyping = false;    // キー入力の間は隠し、手を止めたら表示する
     Placement placement = Placement::Above;
     BadgeStyle style;
     bool allApps = true;             // すべてのアプリで表示する。false なら apps に挙げたアプリだけ

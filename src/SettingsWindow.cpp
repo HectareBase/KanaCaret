@@ -32,7 +32,7 @@ enum ControlId : int {
     kIdNav = 1000,
     kIdMode, kIdPlacement, kIdPreview,
     kIdAppScope, kIdAppHint, kIdAppList, kIdAppRefresh,
-    kIdAutostart,
+    kIdAutostart, kIdHideTyping,
     kIdSize = 1020, kIdOpacity, kIdGap, kIdShadow,  // スライダー
     kIdKanaSwatch = 1100,   // + 見本の番号
     kIdLatinSwatch = 1200,
@@ -210,6 +210,8 @@ void SettingsWindow::CreateControls() {
     HWND mode = Add(0, WC_COMBOBOXW, L"", kComboStyle, kIdMode, x, 90, 300, 200);
     for (const wchar_t* s : {L"入力欄にいる間は常に表示", L"切り替えたときだけ表示", L"日本語入力のときだけ表示"})
         SendMessageW(mode, CB_ADDSTRING, 0, (LPARAM)s);
+    Add(0, WC_BUTTONW, L"入力中は隠す(手を止めると表示する)", WS_TABSTOP | BS_AUTOCHECKBOX, kIdHideTyping, x, 136, w,
+        28);
 
     // 見た目: 左に項目名、右に部品を並べる
     const int labelW = 118, ctlX = x + labelW;
@@ -368,6 +370,7 @@ void SettingsWindow::Refresh() {
         SendDlgItemMessageW(hwnd_, d.id, TBM_SETPOS, TRUE, v);
         SetDlgItemTextW(hwnd_, d.id + kIdValueOffset, (std::to_wstring(v) + d.unit).c_str());
     }
+    CheckDlgButton(hwnd_, kIdHideTyping, s.hideWhileTyping ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwnd_, kIdAutostart, IsAutostartEnabled() ? BST_CHECKED : BST_UNCHECKED);
     RefreshAppList();
     InvalidateRect(hwnd_, nullptr, TRUE);
@@ -483,6 +486,9 @@ void SettingsWindow::OnCommand(int id, int code, HWND ctl) {
         s.placement = (Placement)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
         InvalidateRect(GetDlgItem(hwnd_, kIdPreview), nullptr, FALSE);
         Changed();
+    } else if (id == kIdHideTyping && code == BN_CLICKED) {
+        s.hideWhileTyping = IsDlgButtonChecked(hwnd_, id) == BST_CHECKED;
+        Changed();
     } else if (id == kIdAutostart && code == BN_CLICKED) {
         SetAutostart(IsDlgButtonChecked(hwnd_, id) == BST_CHECKED);
     } else if (id >= kIdKanaSwatch && id < kIdKanaSwatch + SwatchCount(true) && code == BN_CLICKED) {
@@ -559,7 +565,7 @@ ComPtr<ID2D1SolidColorBrush> SettingsWindow::Brush(COLORREF color) {
 
 LRESULT SettingsWindow::OnCustomDraw(NMCUSTOMDRAW* cd) {
     int id = (int)cd->hdr.idFrom;
-    if (id == kIdAutostart) {
+    if (id == kIdAutostart || id == kIdHideTyping) {
         if (cd->dwDrawStage != CDDS_PREPAINT) return CDRF_DODEFAULT;
         DrawCheckBox(cd);
         return CDRF_SKIPDEFAULT;
