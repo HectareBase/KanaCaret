@@ -84,14 +84,15 @@ void Settings::Load() {
     style.gapDip = std::clamp(ReadInt(path, L"GapDip", style.gapDip), 0, kMaxGapDip);
     style.shadow = std::clamp(ReadInt(path, L"Shadow", style.shadow), 0, kMaxShadow);
 
+    allApps = ReadInt(path, L"AllApps", allApps) != 0;
     wchar_t buf[4096] = L"";
-    GetPrivateProfileStringW(kSection, L"Exclude", L"", buf, _countof(buf), path.c_str());
-    exclude.clear();
+    GetPrivateProfileStringW(kSection, L"Apps", L"", buf, _countof(buf), path.c_str());
+    apps.clear();
     std::wstring list = buf;
     for (size_t start = 0; start < list.size();) {
         size_t end = list.find(L',', start);
         if (end == std::wstring::npos) end = list.size();
-        if (end > start) exclude.push_back(Lower(list.substr(start, end - start)));
+        if (end > start) apps.push_back(Lower(list.substr(start, end - start)));
         start = end + 1;
     }
 }
@@ -117,24 +118,29 @@ void Settings::Save() const {
     WriteInt(path, L"Opacity", style.opacity);
     WriteInt(path, L"GapDip", style.gapDip);
     WriteInt(path, L"Shadow", style.shadow);
-    // 以前のキーは、新しいキーと食い違わないよう消す(MouseFallback は廃止した設定)
-    for (const wchar_t* old : {L"Size", L"AccentKana", L"MouseFallback"})
-        WritePrivateProfileStringW(kSection, old, nullptr, path.c_str());
+    WriteInt(path, L"AllApps", allApps);
     std::wstring list;
-    for (const std::wstring& e : exclude) list += (list.empty() ? L"" : L",") + e;
-    WritePrivateProfileStringW(kSection, L"Exclude", list.c_str(), path.c_str());
+    for (const std::wstring& e : apps) list += (list.empty() ? L"" : L",") + e;
+    WritePrivateProfileStringW(kSection, L"Apps", list.c_str(), path.c_str());
+    // 以前のキーは、新しいキーと食い違わないよう消す(MouseFallback と Exclude は廃止した設定)
+    for (const wchar_t* old : {L"Size", L"AccentKana", L"MouseFallback", L"Exclude"})
+        WritePrivateProfileStringW(kSection, old, nullptr, path.c_str());
 }
 
-bool Settings::IsExcluded(const std::wstring& exe) const {
-    std::wstring key = Lower(exe);
-    return std::find(exclude.begin(), exclude.end(), key) != exclude.end();
+bool Settings::IsTarget(const std::wstring& exe) const {
+    return allApps || IsListed(exe);
 }
 
-void Settings::ToggleExclude(const std::wstring& exe) {
+bool Settings::IsListed(const std::wstring& exe) const {
     std::wstring key = Lower(exe);
-    auto it = std::find(exclude.begin(), exclude.end(), key);
-    if (it != exclude.end()) exclude.erase(it);
-    else if (!key.empty()) exclude.push_back(key);
+    return std::find(apps.begin(), apps.end(), key) != apps.end();
+}
+
+void Settings::SetListed(const std::wstring& exe, bool listed) {
+    std::wstring key = Lower(exe);
+    auto it = std::find(apps.begin(), apps.end(), key);
+    if (!listed && it != apps.end()) apps.erase(it);
+    else if (listed && it == apps.end() && !key.empty()) apps.push_back(key);
 }
 
 bool IsAutostartEnabled() {

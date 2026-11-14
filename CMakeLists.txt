@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
-# バージョン番号はここだけで管理する(exe のバージョン情報と配布 zip の名前に使われる)
-project(KanaCaret VERSION 0.2.0 LANGUAGES CXX)
+# バージョン番号はここだけで管理する(exe のバージョン情報と、配布 zip・インストーラーの名前に使われる)
+project(KanaCaret VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,12 +23,15 @@ add_executable(KanaCaret WIN32
     src/Settings.cpp
     src/SettingsWindow.cpp
     src/DarkMode.cpp
+    src/AppList.cpp
     resources/app.manifest
     resources/app.rc
 )
-target_link_libraries(KanaCaret PRIVATE imm32 oleacc ole32 oleaut32 shcore user32 gdi32 shell32 advapi32 d2d1 dwrite comctl32 comdlg32 dwmapi uxtheme)
+target_link_libraries(KanaCaret PRIVATE imm32 oleacc ole32 oleaut32 shcore user32 gdi32 shell32 advapi32 d2d1 dwrite comctl32 comdlg32 dwmapi uxtheme version)
 configure_file(resources/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h @ONLY)
 target_include_directories(KanaCaret PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# Ninja は .rc の #include を追わないので、バージョンを上げたときに作り直されるよう明示する
+set_source_files_properties(resources/app.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h)
 # 使わないコードを取り除く(exe の大半は静的リンクした C ランタイム)
 target_compile_options(KanaCaret PRIVATE $<$<CONFIG:Release>:/Gy /GL>)
 target_link_options(KanaCaret PRIVATE $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>)

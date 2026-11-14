@@ -24,8 +24,6 @@ public:
     // Tab キーでの移動などを処理したら true を返す(メッセージループから呼ぶ)
     bool PreTranslate(MSG* msg);
     void SetTheme(const Theme& theme);
-    // 「アプリ」のページで追加の候補に出す、最後に使った他アプリの exe 名
-    void SetRecentApp(const std::wstring& exe);
     // 設定が画面の外で変わったときに、表示を合わせる
     void Refresh();
 
@@ -52,10 +50,16 @@ private:
     void OnCommand(int id, int code, HWND ctl);
     void OnSlider(HWND ctl);
     LRESULT OnCustomDraw(NMCUSTOMDRAW* cd);
+    LRESULT DrawAppListItem(NMLVCUSTOMDRAW* cd);
+    void OnAppChecked(const NMLISTVIEW* nm);
     void DrawCheckBox(NMCUSTOMDRAW* cd);
     void DrawSliderPart(NMCUSTOMDRAW* cd);
     void OnDrawItem(const DRAWITEMSTRUCT* dis);
     void DrawNavItem(const DRAWITEMSTRUCT* dis);
+    void DrawComboItem(const DRAWITEMSTRUCT* dis);
+    void PaintCombo(HWND combo);
+    static LRESULT CALLBACK ComboProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR self);
+    int ComboItemHeight(bool field) const;
     void DrawSwatch(const DRAWITEMSTRUCT* dis, bool kana, int index);
     void DrawPreview(HDC dc, RECT rc);
     void DrawBadgeAt(HDC dc, int x, int y, int box, bool native, BadgeColors colors, int opacity, int shadow);
@@ -65,7 +69,9 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> Brush(COLORREF color);
     void PickSwatch(bool kana, int index);
     void Changed();
+    // 「アプリ」のページの一覧を、実行中のアプリと対象に挙げたアプリで作り直す
     void RefreshAppList();
+    void UpdateAppHint();
     int S(int dip) const { return MulDiv(dip, dpi_, 96); }
     float Sf(float dip) const { return dip * dpi_ / 96.0f; }
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -78,7 +84,8 @@ private:
     Theme theme_;
     Palette palette_{};
     HBRUSH bgBrush_ = nullptr, controlBrush_ = nullptr;
-    std::wstring recentApp_;
+    std::vector<std::wstring> appRows_;  // 「アプリ」の一覧の各行の exe 名
+    bool fillingApps_ = false;           // 一覧を作っている間は、チェックの変化を設定に反映しない
     UINT dpi_ = 96;
     HFONT font_ = nullptr;
     HFONT headingFont_ = nullptr;

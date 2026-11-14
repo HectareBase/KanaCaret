@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "AppList.h"
 #include "DarkMode.h"
 #include "version.h"  // CMakeLists.txt のバージョン番号から生成される
 
@@ -21,11 +22,16 @@ constexpr int kNavItemH = 36;
 constexpr int kContentX = 196, kContentW = 460;
 constexpr int kSwatchDip = 32, kSwatchGapDip = 6, kSwatchBadgeDip = 24;
 constexpr int kMarginDip = 6;  // バッジの影の余白(IndicatorWindow と同じ)
+constexpr int kComboItemH = 28;  // コンボボックスの一覧の 1 行の高さ
+// コンボボックスは自前で描く。一覧の行は WM_DRAWITEM、閉じた欄はサブクラスの WM_PAINT で描く。
+// 標準のままだと、ダークのテーマで一覧の選んでいる行が白地に白い文字になり読めない。
+// 一覧だけを自前で描く(CBS_OWNERDRAWFIXED)と、閉じた欄が白い枠と箱の付いた矢印の古い形になるので、欄も描く
+constexpr DWORD kComboStyle = WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
 
 enum ControlId : int {
     kIdNav = 1000,
     kIdMode, kIdPlacement, kIdPreview,
-    kIdAppList, kIdAppEdit, kIdAppAdd, kIdAppRemove, kIdAppRecent,
+    kIdAppScope, kIdAppHint, kIdAppList, kIdAppRefresh,
     kIdAutostart,
     kIdSize = 1020, kIdOpacity, kIdGap, kIdShadow,  // スライダー
     kIdKanaSwatch = 1100,   // + 見本の番号
@@ -100,17 +106,6 @@ COLORREF g_customColors[16] = {
     RGB(255, 255, 255), RGB(255, 255, 255), RGB(255, 255, 255), RGB(255, 255, 255),
 };
 
-std::wstring Trim(const std::wstring& s) {
-    size_t b = s.find_first_not_of(L" \t"), e = s.find_last_not_of(L" \t");
-    return b == std::wstring::npos ? L"" : s.substr(b, e - b + 1);
-}
-
-std::wstring WindowText(HWND hwnd) {
-    std::wstring s(GetWindowTextLengthW(hwnd) + 1, L'\0');
-    s.resize(GetWindowTextW(hwnd, s.data(), (int)s.size()));
-    return s;
-}
-
 COLORREF ToColorRef(const D2D1_COLOR_F& c) {
     return RGB((BYTE)(c.r * 255 + 0.5f), (BYTE)(c.g * 255 + 0.5f), (BYTE)(c.b * 255 + 0.5f));
 }
@@ -132,7 +127,7 @@ void SettingsWindow::Open(HINSTANCE instance, Settings* settings, Renderer* rend
     renderer_ = renderer;
     changed_ = std::move(changed);
 
-    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
+    INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES};
     InitCommonControlsEx(&icc);
     if (!d2d_) D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_.GetAddressOf());
 
@@ -193,11 +188,6 @@ void SettingsWindow::SetTheme(const Theme& theme) {
     if (hwnd_) ApplyPalette();
 }
 
-void SettingsWindow::SetRecentApp(const std::wstring& exe) {
-    recentApp_ = exe;
-    if (hwnd_) RefreshAppList();
-}
-
 HWND SettingsWindow::Add(int page, const wchar_t* cls, const wchar_t* text, DWORD style, int id, int x, int y, int w,
                          int h, bool heading) {
     HWND hwnd = CreateWindowExW(0, cls, text, WS_CHILD | style | (page < 0 ? WS_VISIBLE : 0), 0, 0, 0, 0, hwnd_,
@@ -217,7 +207,7 @@ void SettingsWindow::CreateControls() {
     // 表示
     Add(0, WC_STATICW, kPages[0], 0, 0, x, 16, w, 32, true);
     Add(0, WC_STATICW, L"表示するとき", 0, 0, x, 68, w, 20);
-    HWND mode = Add(0, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, kIdMode, x, 90, 300, 200);
+    HWND mode = Add(0, WC_COMBOBOXW, L"", kComboStyle, kIdMode, x, 90, 300, 200);
     for (const wchar_t* s : {L"入力欄にいる間は常に表示", L"切り替えたときだけ表示", L"日本語入力のときだけ表示"})
         SendMessageW(mode, CB_ADDSTRING, 0, (LPARAM)s);
 
@@ -225,7 +215,7 @@ void SettingsWindow::CreateControls() {
     const int labelW = 118, ctlX = x + labelW;
     Add(1, WC_STATICW, kPages[1], 0, 0, x, 16, w, 32, true);
     Add(1, WC_STATICW, L"位置", 0, 0, x, 68, labelW, 20);
-    HWND place = Add(1, WC_COMBOBOXW, L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, kIdPlacement, ctlX, 64, 262, 200);
+    HWND place = Add(1, WC_COMBOBOXW, L"", kComboStyle, kIdPlacement, ctlX, 64, 262, 200);
     for (const wchar_t* s : {L"キャレットの上", L"キャレットの右上", L"キャレットの下"})
         SendMessageW(place, CB_ADDSTRING, 0, (LPARAM)s);
     for (int i = 0; i < (int)std::size(kSliders); ++i) {
@@ -263,14 +253,20 @@ void SettingsWindow::CreateControls() {
 
     // アプリ
     Add(2, WC_STATICW, kPages[2], 0, 0, x, 16, w, 32, true);
-    Add(2, WC_STATICW, L"次のアプリでは表示しません。", 0, 0, x, 68, w, 20);
-    Add(2, WC_LISTBOXW, L"", WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_SORT | LBS_NOINTEGRALHEIGHT,
-        kIdAppList, x, 92, 300, 200);
-    Add(2, WC_BUTTONW, L"削除", WS_TABSTOP | BS_PUSHBUTTON, kIdAppRemove, x + 312, 92, 140, 30);
-    HWND edit = Add(2, WC_EDITW, L"", WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, kIdAppEdit, x, 307, 300, 24);
-    SendMessageW(edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"exe の名前(例: notepad.exe)");
-    Add(2, WC_BUTTONW, L"追加", WS_TABSTOP | BS_PUSHBUTTON, kIdAppAdd, x + 312, 305, 140, 30);
-    Add(2, WC_BUTTONW, L"", WS_TABSTOP | BS_PUSHBUTTON, kIdAppRecent, x, 348, 300, 30);
+    Add(2, WC_STATICW, L"表示するアプリ", 0, 0, x, 68, w, 20);
+    HWND scope = Add(2, WC_COMBOBOXW, L"", kComboStyle, kIdAppScope, x, 90, 300, 200);
+    for (const wchar_t* s : {L"すべてのアプリ", L"チェックしたアプリだけ"}) SendMessageW(scope, CB_ADDSTRING, 0, (LPARAM)s);
+    for (HWND combo : {mode, place, scope}) SetWindowSubclass(combo, ComboProc, 0, (DWORD_PTR)this);
+    Add(2, WC_STATICW, L"", 0, kIdAppHint, x, 130, w, 40);
+    // 実行中のアプリの一覧。チェックを付けるだけで対象にできる(exe 名を打たなくてよい)
+    HWND list = Add(2, WC_LISTVIEWW, L"アプリ",
+                    WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                    kIdAppList, x, 176, w, 306);
+    ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    // 列は 1 つだけにして、exe 名は行の右端に描く(列を分けると、ダークのテーマで境目に縦線が出る)
+    LVCOLUMNW col{LVCF_WIDTH};
+    ListView_InsertColumn(list, 0, &col);
+    Add(2, WC_BUTTONW, L"一覧を更新", WS_TABSTOP | BS_PUSHBUTTON, kIdAppRefresh, x, 494, 140, 30);
 
     // 全般
     Add(3, WC_STATICW, kPages[3], 0, 0, x, 16, w, 32, true);
@@ -326,6 +322,11 @@ void SettingsWindow::ApplyPalette() {
             if (GetComboBoxInfo(it.hwnd, &cbi)) SetControlDark(cbi.hwndList, p.dark, L"DarkMode_Explorer");
         } else if (!_wcsicmp(cls, WC_EDITW)) {
             SetControlDark(it.hwnd, p.dark, L"DarkMode_CFD");
+        } else if (!_wcsicmp(cls, WC_LISTVIEWW)) {
+            SetControlDark(it.hwnd, p.dark, L"DarkMode_Explorer");
+            ListView_SetBkColor(it.hwnd, p.controlBg);
+            ListView_SetTextBkColor(it.hwnd, p.controlBg);
+            ListView_SetTextColor(it.hwnd, p.text);
         } else if (!_wcsicmp(cls, WC_LISTBOXW) ||
                    (!_wcsicmp(cls, WC_BUTTONW) && (GetWindowLongW(it.hwnd, GWL_STYLE) & BS_TYPEMASK) == BS_PUSHBUTTON)) {
             SetControlDark(it.hwnd, p.dark, L"DarkMode_Explorer");
@@ -342,6 +343,11 @@ void SettingsWindow::Layout() {
     }
     for (const SliderDef& d : kSliders) SendDlgItemMessageW(hwnd_, d.id, TBM_SETTHUMBLENGTH, S(20), 0);
     SendDlgItemMessageW(hwnd_, kIdNav, LB_SETITEMHEIGHT, 0, S(kNavItemH));
+    for (int id : {kIdMode, kIdPlacement, kIdAppScope}) {
+        SendDlgItemMessageW(hwnd_, id, CB_SETITEMHEIGHT, (WPARAM)-1, ComboItemHeight(true));
+        SendDlgItemMessageW(hwnd_, id, CB_SETITEMHEIGHT, 0, ComboItemHeight(false));
+    }
+    ListView_SetColumnWidth(GetDlgItem(hwnd_, kIdAppList), 0, LVSCW_AUTOSIZE_USEHEADER);  // 幅いっぱいにする
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
@@ -369,15 +375,96 @@ void SettingsWindow::Refresh() {
 
 void SettingsWindow::RefreshAppList() {
     HWND list = GetDlgItem(hwnd_, kIdAppList);
-    SendMessageW(list, LB_RESETCONTENT, 0, 0);
-    for (const std::wstring& e : settings_->exclude) SendMessageW(list, LB_ADDSTRING, 0, (LPARAM)e.c_str());
-    EnableWindow(GetDlgItem(hwnd_, kIdAppRemove), FALSE);
+    // 作り直しても、見ていた位置と選んでいた行はそのままにする
+    int top = ListView_GetTopIndex(list);
+    int sel = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    std::wstring selExe = sel >= 0 && sel < (int)appRows_.size() ? appRows_[sel] : L"";
 
-    HWND recent = GetDlgItem(hwnd_, kIdAppRecent);
-    bool can = !recentApp_.empty() && !settings_->IsExcluded(recentApp_);
-    SetWindowTextW(recent, recentApp_.empty() ? L"最後に使ったアプリを追加"
-                                              : (L"「" + recentApp_ + L"」を追加").c_str());
-    EnableWindow(recent, can);
+    std::vector<std::pair<std::wstring, std::wstring>> rows;  // exe 名、表示名
+    for (const RunningApp& app : ListRunningApps()) rows.emplace_back(app.exe, app.label);
+    // 対象に挙げてあるが今はウィンドウの無いアプリも、外せるように後ろに並べる
+    for (const std::wstring& exe : settings_->apps) {
+        if (std::none_of(rows.begin(), rows.end(), [&](const auto& r) { return SameExe(r.first, exe); }))
+            rows.emplace_back(exe, exe + L"(実行していません)");
+    }
+
+    fillingApps_ = true;
+    SendMessageW(list, WM_SETREDRAW, FALSE, 0);
+    ListView_DeleteAllItems(list);
+    appRows_.clear();
+    int selRow = -1;
+    for (const auto& [exe, label] : rows) {
+        LVITEMW item{LVIF_TEXT};
+        item.iItem = (int)appRows_.size();
+        item.pszText = const_cast<wchar_t*>(label.c_str());
+        int row = ListView_InsertItem(list, &item);
+        if (row < 0) continue;
+        ListView_SetCheckState(list, row, settings_->IsListed(exe));
+        if (SameExe(exe, selExe)) selRow = row;
+        appRows_.push_back(exe);
+    }
+    if (selRow >= 0) ListView_SetItemState(list, selRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    RECT ir;
+    if (top > 0 && ListView_GetItemRect(list, 0, &ir, LVIR_BOUNDS)) ListView_Scroll(list, 0, top * (ir.bottom - ir.top));
+    ListView_SetColumnWidth(list, 0, LVSCW_AUTOSIZE_USEHEADER);  // スクロールバーが出たり消えたりした分を合わせる
+    SendMessageW(list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(list, nullptr, TRUE);
+    fillingApps_ = false;
+    UpdateAppHint();
+}
+
+void SettingsWindow::UpdateAppHint() {
+    const Settings& s = *settings_;
+    SendDlgItemMessageW(hwnd_, kIdAppScope, CB_SETCURSEL, s.allApps ? 0 : 1, 0);
+    SetDlgItemTextW(hwnd_, kIdAppHint,
+                    s.allApps ? L"すべてのアプリで表示します。下の一覧でチェックを付けると、チェックしたアプリだけで"
+                                L"表示するように切り替わります。"
+                              : L"チェックを付けたアプリでだけ表示します。一覧には、いまウィンドウを開いているアプリが"
+                                L"並びます。");
+}
+
+// 一覧のチェックを付け外ししたとき。すべてのアプリが対象のときにチェックを付けたら、
+// 「チェックしたアプリだけ」に切り替える(選ぶだけで済むように)
+void SettingsWindow::OnAppChecked(const NMLISTVIEW* nm) {
+    if (fillingApps_ || !(nm->uChanged & LVIF_STATE) || nm->iItem < 0 || nm->iItem >= (int)appRows_.size()) return;
+    if (!((nm->uNewState ^ nm->uOldState) & LVIS_STATEIMAGEMASK)) return;
+    bool checked = (nm->uNewState & LVIS_STATEIMAGEMASK) == INDEXTOSTATEIMAGEMASK(2);
+    Settings& s = *settings_;
+    const std::wstring& exe = appRows_[nm->iItem];
+    if (checked == s.IsListed(exe) && !(checked && s.allApps)) return;
+    s.SetListed(exe, checked);
+    if (checked) s.allApps = false;
+    UpdateAppHint();
+    Changed();
+}
+
+// 一覧の各行の右端に、exe 名を表示名より薄い色で描く(表示名と exe 名が同じなら描かない)
+LRESULT SettingsWindow::DrawAppListItem(NMLVCUSTOMDRAW* cd) {
+    switch (cd->nmcd.dwDrawStage) {
+    case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
+    case CDDS_ITEMPREPAINT:
+        cd->clrText = palette_.text;
+        cd->clrTextBk = palette_.controlBg;
+        return CDRF_NOTIFYPOSTPAINT;
+    case CDDS_ITEMPOSTPAINT: {
+        int row = (int)cd->nmcd.dwItemSpec;
+        if (row < 0 || row >= (int)appRows_.size()) break;
+        const std::wstring& exe = appRows_[row];
+        wchar_t label[260] = L"";
+        ListView_GetItemText(cd->nmcd.hdr.hwndFrom, row, 0, label, _countof(label));
+        if (SameExe(label, exe)) break;
+        RECT rc;
+        ListView_GetItemRect(cd->nmcd.hdr.hwndFrom, row, &rc, LVIR_BOUNDS);
+        rc.right -= S(8);
+        HGDIOBJ oldFont = SelectObject(cd->nmcd.hdc, font_);
+        SetBkMode(cd->nmcd.hdc, TRANSPARENT);
+        SetTextColor(cd->nmcd.hdc, palette_.subtle);
+        DrawTextW(cd->nmcd.hdc, exe.c_str(), -1, &rc, DT_SINGLELINE | DT_RIGHT | DT_VCENTER | DT_NOPREFIX);
+        SelectObject(cd->nmcd.hdc, oldFont);
+        break;
+    }
+    }
+    return CDRF_DODEFAULT;
 }
 
 void SettingsWindow::Changed() {
@@ -402,34 +489,12 @@ void SettingsWindow::OnCommand(int id, int code, HWND ctl) {
         PickSwatch(true, id - kIdKanaSwatch);
     } else if (id >= kIdLatinSwatch && id < kIdLatinSwatch + SwatchCount(false) && code == BN_CLICKED) {
         PickSwatch(false, id - kIdLatinSwatch);
-    } else if (id == kIdAppList && code == LBN_SELCHANGE) {
-        EnableWindow(GetDlgItem(hwnd_, kIdAppRemove), SendMessageW(ctl, LB_GETCURSEL, 0, 0) >= 0);
-    } else if (id == kIdAppRemove && code == BN_CLICKED) {
-        HWND list = GetDlgItem(hwnd_, kIdAppList);
-        int sel = (int)SendMessageW(list, LB_GETCURSEL, 0, 0);
-        if (sel < 0) return;
-        std::wstring name(SendMessageW(list, LB_GETTEXTLEN, sel, 0) + 1, L'\0');
-        name.resize(SendMessageW(list, LB_GETTEXT, sel, (LPARAM)name.data()));
-        if (s.IsExcluded(name)) s.ToggleExclude(name);
-        RefreshAppList();
-        SetFocus(list);
+    } else if (id == kIdAppScope && code == CBN_SELCHANGE) {
+        s.allApps = SendMessageW(ctl, CB_GETCURSEL, 0, 0) == 0;
+        UpdateAppHint();
         Changed();
-    } else if ((id == kIdAppAdd && code == BN_CLICKED) || (id == IDOK && GetFocus() == GetDlgItem(hwnd_, kIdAppEdit))) {
-        // exe 名だけを受け付ける。拡張子が無ければ .exe を補う(区切りのカンマは使えない)
-        HWND edit = GetDlgItem(hwnd_, kIdAppEdit);
-        std::wstring name = Trim(WindowText(edit));
-        name.erase(std::remove(name.begin(), name.end(), L','), name.end());
-        if (size_t slash = name.find_last_of(L"\\/"); slash != std::wstring::npos) name.erase(0, slash + 1);
-        if (name.empty()) return;
-        if (name.find(L'.') == std::wstring::npos) name += L".exe";
-        if (!s.IsExcluded(name)) s.ToggleExclude(name);
-        SetWindowTextW(edit, L"");
+    } else if (id == kIdAppRefresh && code == BN_CLICKED) {
         RefreshAppList();
-        Changed();
-    } else if (id == kIdAppRecent && code == BN_CLICKED) {
-        if (!s.IsExcluded(recentApp_)) s.ToggleExclude(recentApp_);
-        RefreshAppList();
-        Changed();
     } else if (id == IDCANCEL) {  // Esc キーで閉じる
         Close();
     }
@@ -593,10 +658,148 @@ void SettingsWindow::DrawSliderPart(NMCUSTOMDRAW* cd) {
 
 void SettingsWindow::OnDrawItem(const DRAWITEMSTRUCT* dis) {
     int id = (int)dis->CtlID;
-    if (id == kIdNav) DrawNavItem(dis);
+    if (dis->CtlType == ODT_COMBOBOX) DrawComboItem(dis);
+    else if (id == kIdNav) DrawNavItem(dis);
     else if (id == kIdPreview) DrawPreview(dis->hDC, dis->rcItem);
     else if (id >= kIdKanaSwatch && id < kIdKanaSwatch + SwatchCount(true)) DrawSwatch(dis, true, id - kIdKanaSwatch);
     else if (id >= kIdLatinSwatch && id < kIdLatinSwatch + SwatchCount(false)) DrawSwatch(dis, false, id - kIdLatinSwatch);
+}
+
+// コンボボックスの高さ。閉じた欄(field)は文字の高さに合わせ、一覧の行は少し広げる
+int SettingsWindow::ComboItemHeight(bool field) const {
+    if (!field) return S(kComboItemH);
+    HDC dc = GetDC(hwnd_);
+    HGDIOBJ old = SelectObject(dc, font_);
+    TEXTMETRICW tm{};
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(hwnd_, dc);
+    return tm.tmHeight + S(1);
+}
+
+// コンボボックスの閉じた欄と一覧の行。一覧で選んでいる行は、左のカテゴリと同じく薄く塗ってアクセントの縦線を引く
+void SettingsWindow::DrawComboItem(const DRAWITEMSTRUCT* dis) {
+    const Palette& p = palette_;
+    HDC dc = dis->hDC;
+    RECT rc = dis->rcItem;
+    bool field = (dis->itemState & ODS_COMBOBOXEDIT) != 0;
+    bool selected = !field && (dis->itemState & ODS_SELECTED);
+    COLORREF text = p.text;
+    if (!field) {
+        // 閉じた欄の背景はテーマが描くので塗らない。一覧の行は背景から塗る
+        FillRect(dc, &rc, controlBrush_);
+        if (selected && theme_.highContrast) {
+            HBRUSH hl = CreateSolidBrush(p.accent);
+            FillRect(dc, &rc, hl);
+            DeleteObject(hl);
+            text = p.onAccent;
+        } else if (selected && BeginD2D(dc, rc)) {
+            // ダークでは一覧の背景(controlBg)とカテゴリの選択色が近いので、少し明るくする
+            COLORREF fill = p.dark ? RGB(61, 61, 61) : p.navSelected;
+            D2D1_RECT_F bg = D2D1::RectF(rc.left + Sf(2), rc.top + Sf(2), rc.right - Sf(2), rc.bottom - Sf(2));
+            target_->FillRoundedRectangle(D2D1::RoundedRect(bg, Sf(4), Sf(4)), Brush(fill).Get());
+            float cy = (rc.top + rc.bottom) / 2.0f;
+            D2D1_RECT_F bar = D2D1::RectF(rc.left + Sf(2), cy - Sf(7), rc.left + Sf(5), cy + Sf(7));
+            target_->FillRoundedRectangle(D2D1::RoundedRect(bar, Sf(1.5f), Sf(1.5f)), Brush(p.accent).Get());
+            EndD2D();
+        }
+    }
+    if ((int)dis->itemID < 0) return;
+    std::wstring s((size_t)SendMessageW(dis->hwndItem, CB_GETLBTEXTLEN, dis->itemID, 0) + 1, L'\0');
+    s.resize((size_t)SendMessageW(dis->hwndItem, CB_GETLBTEXT, dis->itemID, (LPARAM)s.data()));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, IsWindowEnabled(dis->hwndItem) ? text : p.subtle);
+    HGDIOBJ oldFont = SelectObject(dc, font_);
+    RECT tr = rc;
+    tr.left += field ? S(4) : S(12);
+    DrawTextW(dc, s.c_str(), -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    SelectObject(dc, oldFont);
+    if (field && (dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT)) {
+        RECT fr = rc;
+        InflateRect(&fr, -S(1), -S(1));
+        DrawFocusRect(dc, &fr);
+    }
+}
+
+// 閉じたコンボボックス: Windows 11 の形(角丸の欄、右端に山形の矢印)
+void SettingsWindow::PaintCombo(HWND combo) {
+    const Palette& p = palette_;
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(combo, &ps);
+    RECT rc;
+    GetClientRect(combo, &rc);
+    FillRect(dc, &rc, bgBrush_);
+    bool enabled = IsWindowEnabled(combo) != FALSE;
+    if (BeginD2D(dc, rc)) {
+        COLORREF fill = theme_.highContrast ? p.controlBg : p.dark ? RGB(45, 45, 45) : RGB(251, 251, 251);
+        COLORREF border = theme_.highContrast ? p.stroke : p.dark ? RGB(70, 70, 70) : RGB(204, 204, 204);
+        D2D1_RECT_F f = D2D1::RectF(rc.left + 0.5f, rc.top + 0.5f, rc.right - 0.5f, rc.bottom - 0.5f);
+        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(f, Sf(4), Sf(4));
+        target_->FillRoundedRectangle(rr, Brush(fill).Get());
+        target_->DrawRoundedRectangle(rr, Brush(border).Get(), 1.0f);
+        // 山形の矢印
+        float cx = rc.right - Sf(16), cy = (rc.top + rc.bottom) / 2.0f, w = Sf(4.5f), h = Sf(2.5f);
+        ComPtr<ID2D1PathGeometry> path;
+        ComPtr<ID2D1GeometrySink> sink;
+        if (SUCCEEDED(d2d_->CreatePathGeometry(&path)) && SUCCEEDED(path->Open(&sink))) {
+            sink->BeginFigure(D2D1::Point2F(cx - w, cy - h), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx, cy + h));
+            sink->AddLine(D2D1::Point2F(cx + w, cy - h));
+            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+            sink->Close();
+            target_->DrawGeometry(path.Get(), Brush(p.subtle).Get(), Sf(1.2f));
+        }
+        EndD2D();
+    }
+    int sel = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (sel >= 0) {
+        std::wstring s((size_t)SendMessageW(combo, CB_GETLBTEXTLEN, sel, 0) + 1, L'\0');
+        s.resize((size_t)SendMessageW(combo, CB_GETLBTEXT, sel, (LPARAM)s.data()));
+        HGDIOBJ oldFont = SelectObject(dc, font_);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, enabled ? p.text : p.subtle);
+        RECT tr{rc.left + S(11), rc.top, rc.right - S(32), rc.bottom};
+        DrawTextW(dc, s.c_str(), -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SelectObject(dc, oldFont);
+    }
+    if (GetFocus() == combo && !FocusCuesHidden(combo)) {
+        RECT fr = rc;
+        InflateRect(&fr, -S(3), -S(3));
+        DrawFocusRect(dc, &fr);
+    }
+    EndPaint(combo, &ps);
+}
+
+LRESULT CALLBACK SettingsWindow::ComboProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR ref) {
+    auto* self = reinterpret_cast<SettingsWindow*>(ref);
+    switch (msg) {
+    case WM_PAINT:
+        self->PaintCombo(hwnd);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+    case WM_ENABLE:
+    case WM_UPDATEUISTATE:
+    case CB_SETCURSEL:
+    case WM_KEYDOWN:
+    case WM_CHAR:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_MOUSEWHEEL:
+    case WM_COMMAND:
+    case WM_CAPTURECHANGED: {
+        // 標準の処理が欄を直接描くことがあるので、後から描き直す
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return r;
+    }
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(hwnd, ComboProc, 0);
+        break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 void SettingsWindow::DrawNavItem(const DRAWITEMSTRUCT* dis) {
@@ -763,13 +966,31 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (self && lp) self->OnSlider((HWND)lp);
         return 0;
     case WM_NOTIFY:
-        if (self && reinterpret_cast<NMHDR*>(lp)->code == NM_CUSTOMDRAW)
-            return self->OnCustomDraw(reinterpret_cast<NMCUSTOMDRAW*>(lp));
+        if (self) {
+            auto* hdr = reinterpret_cast<NMHDR*>(lp);
+            if (hdr->idFrom == kIdAppList) {
+                if (hdr->code == NM_CUSTOMDRAW) return self->DrawAppListItem(reinterpret_cast<NMLVCUSTOMDRAW*>(lp));
+                if (hdr->code == LVN_ITEMCHANGED) self->OnAppChecked(reinterpret_cast<NMLISTVIEW*>(lp));
+                return 0;
+            }
+            if (hdr->code == NM_CUSTOMDRAW) return self->OnCustomDraw(reinterpret_cast<NMCUSTOMDRAW*>(lp));
+        }
+        break;
+    case WM_ACTIVATE:
+        // 他のアプリを開いてから戻ってきたときに、一覧にすぐ出るようにする
+        if (self && LOWORD(wp) != WA_INACTIVE && !self->items_.empty()) self->RefreshAppList();
         break;
     case WM_MEASUREITEM:
-        if (self && wp == kIdNav) {
-            reinterpret_cast<MEASUREITEMSTRUCT*>(lp)->itemHeight = self->S(kNavItemH);
-            return TRUE;
+        if (self) {
+            auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
+            if (mis->CtlType == ODT_COMBOBOX) {
+                mis->itemHeight = self->ComboItemHeight(mis->itemID == (UINT)-1);
+                return TRUE;
+            }
+            if (wp == kIdNav) {
+                mis->itemHeight = self->S(kNavItemH);
+                return TRUE;
+            }
         }
         break;
     case WM_DRAWITEM:

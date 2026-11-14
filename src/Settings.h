@@ -36,13 +36,15 @@ struct Settings {
     DisplayMode mode = DisplayMode::Always;
     Placement placement = Placement::Above;
     BadgeStyle style;
-    std::vector<std::wstring> exclude;  // 表示しないアプリの exe 名(小文字)
+    bool allApps = true;             // すべてのアプリで表示する。false なら apps に挙げたアプリだけ
+    std::vector<std::wstring> apps;  // 表示するアプリの exe 名(小文字)。allApps の間も消さずに残す
 
     void Load();
     void Save() const;
 
-    bool IsExcluded(const std::wstring& exe) const;
-    void ToggleExclude(const std::wstring& exe);
+    bool IsTarget(const std::wstring& exe) const;  // このアプリで表示するか
+    bool IsListed(const std::wstring& exe) const;  // apps に挙げているか
+    void SetListed(const std::wstring& exe, bool listed);
 };
 
 // Windows の起動時に実行する(HKCU の Run キー)

@@ -4,6 +4,7 @@
 
 - Windows 11
 - Visual Studio 2022 以降(「C++ によるデスクトップ開発」。CMake と Ninja も同梱のものを使う)
+- 配布物を作るときだけ NSIS 3(`winget install NSIS.NSIS`。`makensis` は PATH か既定のインストール先から探す)
 
 ## ビルド
 
@@ -23,10 +24,10 @@ build.cmd
 
 | 場所 | 中身 | 公開 |
 |---|---|---|
-| `src/`, `resources/`, `probe/`, `tools/` | ソース、リソース、ツール | する |
+| `src/`, `resources/`, `probe/`, `tools/`, `installer/` | ソース、リソース、ツール、インストーラーのスクリプト | する |
 | `docs/` | 設計ドキュメント | する |
 | `build/` | ビルド成果物 | しない |
-| `dist/` | 配布用 zip | しない(Releases に載せる) |
+| `dist/` | 配布用 zip とインストーラー | しない(Releases に載せる) |
 | `local/logs/` | 計測ログ | しない |
 | `local/checks/` | 確認用スクリーンショット | しない |
 
@@ -38,9 +39,9 @@ build.cmd
 | `tools/measure-load.ps1` | `local/logs/` | `stats-<yyyyMMdd-HHmmss>.log` |
 | `tools/check-app.ps1` | `local/checks/<yyyyMMdd-HHmmss>/` | `<Target>-a.png`、`<Target>-kana.png` |
 | `badge-preview.exe` | 引数で指定 | 例: `local/checks/badges.png` |
-| `tools/package.ps1` | `dist/` | `KanaCaret-<バージョン>.zip` |
+| `tools/package.ps1` | `dist/` | `KanaCaret-<バージョン>.zip`、`KanaCaret-<バージョン>-setup.exe` |
 
-利用者の PC に書くもの: 設定 `%APPDATA%\KanaCaret\settings.ini`、自動起動の Run キー、`--stats`(パス指定なし)のときの `%TEMP%\kanacaret-stats.log`。
+利用者の PC に書くもの: 設定 `%APPDATA%\KanaCaret\settings.ini`、自動起動の Run キー、`--stats`(パス指定なし)のときの `%TEMP%\kanacaret-stats.log`。インストーラーはこのほかに `%LOCALAPPDATA%\Programs\KanaCaret\`、スタートメニューの `KanaCaret.lnk`、`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\KanaCaret` を書く。
 
 ## ツール
 
@@ -113,17 +114,27 @@ build\badge-preview.exe --ico resources\app.ico
 | 見た目 | `badge-preview.exe` の画像と、`check-app.ps1` の実画面 |
 | 設定・メニュー | `settings.ini` を書き換えて起動し直し、`check-app.ps1` で表示が変わるか。確認後は ini を元に戻す |
 | 設定画面 | `KanaCaret.exe --settings` で開き、各ページの見た目と、変えた値が `settings.ini` とインジケーターに反映されるか。確認後は ini と Run キーを元に戻す |
+| インストーラー | 下の「インストーラーの確認」 |
+
+### インストーラーの確認
+
+`package.ps1` で作った `setup.exe` で、次を確かめる。サイレント(`/S`)でも確かめられるが、画面の文字はふつうに実行して見る。
+
+1. KanaCaret を起動した状態で `setup.exe` を実行し、起動中のものが終了して上書きされる。完了画面の「起動する」で起動する。
+2. スタートメニューの「KanaCaret」と、「設定 > アプリ > インストールされているアプリ」の名前・バージョンが正しい。
+3. 設定画面で「Windows の起動時に実行」をオンにしてからアンインストールし、インストール先のフォルダー、ショートカット、Uninstall キー、Run の値が消える。設定フォルダーは「いいえ」なら残る。
+4. 開発中の zip 版などで Run キーを使っていたら、確認の前の値を控えて、終わったら元に戻す。
 
 ## リリース手順
 
-1. `CMakeLists.txt` の `project(VERSION)` を上げる(exe のバージョン情報と zip の名前はここから決まる)。
+1. `CMakeLists.txt` の `project(VERSION)` を上げる(exe・インストーラーのバージョン情報と、zip・インストーラーの名前はここから決まる)。
 2. `CHANGELOG.md` の「未公開」を新しいバージョンの見出しに変える。
-3. 上の確認をする。
-4. zip を作る。表示された SHA256 を控える。
+3. 上の確認をする(インストーラーの確認を含む)。
+4. zip とインストーラーを作る。表示された 2 つの SHA256 を控える。
    ```bat
    powershell -ExecutionPolicy Bypass -File tools\package.ps1
    ```
-5. GitHub の Releases に zip を載せ、本文に変更点と SHA256 を書く。
+5. GitHub の Releases に zip と `setup.exe` を載せ、本文に変更点と両方の SHA256 を書く。
 
 ## 注意
 

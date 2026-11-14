@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -File tools\check-app.ps1 -Target notepad -Im
 # 負荷の計測(local\logs\stats-*.log に内訳)
 powershell -ExecutionPolicy Bypass -File tools\measure-load.ps1 -Seconds 60
 
-# 配布用 zip(dist\)
+# 配布用 zip とインストーラー(dist\。NSIS 3 が要る)
 powershell -ExecutionPolicy Bypass -File tools\package.ps1
 ```
 

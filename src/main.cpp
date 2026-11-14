@@ -119,7 +119,8 @@ struct App {
     ULONGLONG showUntil = 0;   // 「切り替え時だけ表示」で表示を続ける期限
     bool fullscreen = false;
     ULONGLONG fullscreenChecked = 0;
-    std::wstring focusExe;     // 最後にフォーカスのあった他アプリの exe 名(除外メニューに使う)
+    std::wstring focusExe;     // フォーカスのあるアプリの exe 名
+    bool focusTarget = true;   // フォーカスのあるアプリが表示の対象か
 
     // UIA でしか取れなかった入力欄(exe 名|ウィンドウクラス)。次からは Win32/MSAA を試さずに UIA へ進む。
     // 同じ exe でも入力欄で方法が違う(エクスプローラーの名前変更は Win32、検索ボックスは UIA)ため、クラスも含める
@@ -231,11 +232,20 @@ void Update(Reason reason) {
         g.lastCaretOk = 0;
         g.focusKey = FocusKey(fi);
         g.focusExe = ExeName(fi.pid);
+        g.focusTarget = g.settings.IsTarget(g.focusExe);
         g.preferUia = g.uiaKeys.count(g.focusKey) != 0;
         g.showUntil = now + kFlashMs;
         g.indicator.BringToTop();
-        // フックの付け替えは、通知の処理中を避けてメッセージループに戻ってから行う
-        if (fi.pid != g.caretHookPid) PostMessageW(g.main, kRehookMsg, fi.pid, 0);
+        // フックの付け替えは、通知の処理中を避けてメッセージループに戻ってから行う。
+        // 対象外のアプリからはキャレットの通知を受けない
+        DWORD hookPid = g.focusTarget ? fi.pid : 0;
+        if (hookPid != g.caretHookPid) PostMessageW(g.main, kRehookMsg, hookPid, 0);
+    }
+
+    // 対象外のアプリでは、IME も入力位置も問い合わせない
+    if (!g.focusTarget) {
+        g.indicator.Hide();
+        return;
     }
 
     // ウィンドウの移動・サイズ変更中は、位置の取得が追いつかず表示がかくつくので隠す。
@@ -252,7 +262,7 @@ void Update(Reason reason) {
         reason = Reason::Caret;
     }
 
-    if (g.settings.IsExcluded(g.focusExe) || IsFullscreenBusy(now)) {
+    if (IsFullscreenBusy(now)) {
         g.indicator.Hide();
         return;
     }
@@ -349,11 +359,12 @@ void Update(Reason reason) {
 void OnSettingsChanged() {
     g.settings.Save();
     ApplySettings();
+    // 対象のアプリが変わったかもしれないので、設定画面から戻ったときにフォーカスのあるアプリを調べ直す
+    g.lastFocus = nullptr;
 }
 
 void OpenSettings() {
     g.settingsWindow.SetTheme(g.theme);
-    g.settingsWindow.SetRecentApp(g.focusExe);
     g.settingsWindow.Open(g.instance, &g.settings, &g.renderer, OnSettingsChanged);
 }
 
